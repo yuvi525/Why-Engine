@@ -2,20 +2,40 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState, useEffect } from "react";
 import { COLORS, SHADOWS } from "@/lib/design-system";
+import { supabase } from "@/lib/supabase-browser";
 
 const NAV_LINKS = [
-  { href: "/",                    label: "Home"              },
-  { href: "/analyze",             label: "Cost Intelligence" },
-  { href: "/dashboard",           label: "Dashboard"         },
-  { href: "/connect",             label: "Connect"           },
-  { href: "/pricing",             label: "Pricing"           },
-  { href: "/dashboard/autopilot", label: "Autopilot"         },
-  { href: "/docs",                label: "Docs"              },
+  { href: "/",                    label: "Home"       },
+  { href: "/dashboard",           label: "Dashboard"  },
+  { href: "/pricing",             label: "Pricing"    },
+  { href: "/dashboard/autopilot", label: "Autopilot"  },
+  { href: "/docs",                label: "Docs"       },
 ];
 
 export function Navbar() {
   const pathname = usePathname();
+  const [liveCost, setLiveCost] = useState(null);
+
+  useEffect(() => {
+    let interval;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!data?.session) return;
+      const poll = async () => {
+        const r = await fetch('/api/latest-analysis').catch(() => null);
+        if (!r?.ok) return;
+        const d = await r.json();
+        // CORRECT field: d.analysis.totalCost
+        if (d?.found && d?.analysis?.totalCost) {
+          setLiveCost(d.analysis.totalCost);
+        }
+      };
+      poll();
+      interval = setInterval(poll, 15000);
+    });
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <header style={{
@@ -58,13 +78,13 @@ export function Navbar() {
               WHY Engine
             </span>
             <span style={{ fontSize: 9, fontWeight: 600, color: "rgba(255,255,255,0.3)", letterSpacing: "0.18em", textTransform: "uppercase" }}>
-              AI Cost Intelligence
+              AI Cost Autopilot
             </span>
           </div>
         </Link>
 
         {/* Nav links */}
-        <div style={{ display: "flex", alignItems: "center", gap: 1, flex: 1, justifyContent: "center" }}>
+        <div className="hidden md:flex items-center flex-1 justify-center" style={{ gap: 4 }}>
           {NAV_LINKS.map(({ href, label }) => {
             const isActive = pathname === href || (href !== "/" && pathname.startsWith(href));
             return (
@@ -90,8 +110,24 @@ export function Navbar() {
           })}
         </div>
 
+        {/* Mobile Hamburger */}
+        <div className="flex md:hidden flex-1 justify-end items-center">
+          <button style={{ background: "transparent", border: "none", color: "var(--text-primary)", padding: "8px", cursor: "pointer" }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M4 6H20M4 12H20M4 18H20" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        </div>
+
         {/* Auth / CTA */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        <div className="hidden md:flex items-center gap-3 flex-shrink-0">
+          {/* Live cost ticker */}
+          {liveCost !== null && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--emerald)', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.18)', borderRadius: 100, padding: '3px 10px' }}>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--emerald)', animation: 'pulse 1.5s ease infinite', display: 'inline-block' }} />
+              ${Number(liveCost).toFixed(3)} tracked
+            </div>
+          )}
           <Link href="/login" style={{
             padding:        "6px 14px",
             fontSize:       12,
@@ -107,8 +143,8 @@ export function Navbar() {
           >
             Sign In
           </Link>
-          <Link href="/connect" className="btn-accent" style={{ padding: "6px 16px", fontSize: 12, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5, letterSpacing: "0.01em" }}>
-            Connect AI
+          <Link href="/dashboard?demo=true" className="btn-accent" style={{ padding: "6px 16px", fontSize: 12, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 5, letterSpacing: "0.01em" }}>
+            Start Saving
             <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
               <path d="M2 6H10M7 3L10 6L7 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>

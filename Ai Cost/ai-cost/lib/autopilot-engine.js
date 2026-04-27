@@ -32,6 +32,8 @@
  * ─────────────────────────────────────────────────────────────────
  */
 
+import { DOMAINS } from "@/lib/domains";
+
 // ── Lazy Supabase ─────────────────────────────────────────────────────────
 let _sb = null;
 function getSupabase() {
@@ -299,4 +301,225 @@ export async function seedDefaultRules(orgId) {
   const rows = DEFAULT_RULES.map(r => ({ ...r, org_id: orgId }));
   const { error } = await sb.from("autopilot_rules").upsert(rows, { onConflict: "org_id,name" });
   if (error) console.error("[autopilot-engine] seedDefaultRules failed:", error.message);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// EXECUTION LAYER — driven by decision-engine.js output
+// ─────────────────────────────────────────────────────────────────────────
+//
+// runDecision(decision) is the bridge between decision-engine.js and the
+// autopilot engine.
+//
+// SAFETY CONTRACT:
+//   - AWS and Stripe decisions are NEVER executed — always pending approval.
+//   - All AI execution is SIMULATED (console log only, no real API call).
+//   - No external writes happen inside this function.
+//   - Never throws — all errors produce a "failed" status log entry.
+//
+// INPUT  (from makeDecision() in lib/decision-engine.js):
+// {
+//   auto_executable:   boolean
+//   requires_approval: boolean
+//   domain:            "ai_cost" | "aws_cost" | "stripe_revenue"
+//   action_type:       string
+//   priority:          "HIGH" | "MEDIUM" | "LOW"
+//   confidence_pct:    number
+//   reasoning:         string
+// }
+//
+// OUTPUT (log record):
+// {
+//   action:      string   — human-readable description of what happened
+//   status:      "executed" | "pending" | "failed"
+//   timestamp:   string   — ISO-8601
+//   domain:      string
+//   action_type: string
+//   details:     object   — simulation output or approval context
+// }
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * BLOCKED_DOMAINS
+ *
+ * These domains must NEVER reach the execution path.
+ * Any decision with these domains is immediately marked pending.
+ */
+const BLOCKED_DOMAINS = new Set([DOMAINS.AWS, DOMAINS.STRIPE]);
+
+// ── Simulation handlers ───────────────────────────────────────────────────
+// Each handler receives the decision object and returns a details object
+// describing what the simulated execution would do.
+
+/**
+ * simulateModelDowngrade(decision)
+ *
+ * Simulates routing cheaper model for non-critical tasks.
+ * Extracts model names from reasoning/action strings — purely in-memory.
+ */
+function simulateModelDowngrade(decision) {
+  // Extract candidate model names from reasoning text
+  const text       = String(decision?.reasoning || "");
+  const modelRegex = /gpt-4o(?:-mini)?|claude-[\w.-]+|gemini-[\w.-]+|llama-[\w.-]+/gi;
+  const found      = text.match(modelRegex) || [];
+
+  const fromModel = found.find(m => !m.includes("mini") && !m.includes("haiku") && !m.includes("flash"))
+    || "gpt-4o";
+  const toModel   = found.find(m => m.includes("mini") || m.includes("haiku") || m.includes("flash"))
+    || "gpt-4o-mini";
+
+  const simulatedResult = {
+    simulated:         true,
+    from_model:        fromModel,
+    to_model:          toModel,
+    confidence_pct:    decision?.confidence_pct ?? 0,
+    note:              `[SIMULATED] Model routing updated: ${fromModel} → ${toModel} for tasks with complexity_score < 0.7.`,
+    real_action_required: `Update model config in your codebase: set model="${toModel}" for low-complexity task paths.`,
+  };
+
+  console.info("[autopilot-engine] SIMULATED model downgrade:", simulatedResult.note);
+  return simulatedResult;
+}
+
+/**
+ * simulateBudgetCap(decision)
+ *
+ * Logs a budget cap advisory — no external system modified.
+ */
+function simulateBudgetCap(decision) {
+  const simulatedResult = {
+    simulated:            true,
+    cap_usd:              0.50,   // default advisory cap
+    priority:             decision?.priority || "LOW",
+    note:                 "[SIMULATED] Budget cap advisory logged: alert will fire when per-run cost exceeds $0.50.",
+    real_action_required: "Set a cost alert in your AI provider dashboard or add a pre-flight cost check in your ingestion pipeline.",
+  };
+
+  console.info("[autopilot-engine] SIMULATED budget cap advisory:", simulatedResult.note);
+  return simulatedResult;
+}
+
+/**
+ * EXECUTION_HANDLERS
+ *
+ * Maps action_type → simulation function.
+ * Only action types explicitly listed here are eligible for execution.
+ * All others fall through to the pending path.
+ */
+const EXECUTION_HANDLERS = {
+  model_downgrade:    simulateModelDowngrade,
+  budget_cap:         simulateBudgetCap,
+  cost_reduction:     simulateBudgetCap,   // cost_reduction maps to budget advisory
+};
+
+// ── Public API ────────────────────────────────────────────────────────────
+
+/**
+ * runDecision(decision)
+ *
+ * Main execution entry point. Reads a decision from makeDecision() and
+ * either simulates execution (safe AI actions) or marks pending (everything else).
+ *
+ * @param   {object} decision  - Output from makeDecision() in decision-engine.js
+ * @returns {object}           - Log record { action, status, timestamp, domain, action_type, details }
+ */
+export function runDecision(decision) {
+  const timestamp   = new Date().toISOString();
+  const domain      = String(decision?.domain      || DOMAINS.AI);
+  const actionType  = String(decision?.action_type || "generic_optimization");
+  const autoExec    = Boolean(decision?.auto_executable);
+  const reqApproval = Boolean(decision?.requires_approval);
+
+  try {
+    // ── Safety gate 1: blocked domains ──────────────────────────────────
+    if (BLOCKED_DOMAINS.has(domain)) {
+      const log = {
+        action:      `${domain}:${actionType} — blocked; requires human review`,
+        status:      "pending",
+        timestamp,
+        domain,
+        action_type: actionType,
+        details: {
+          reason:        `Domain "${domain}" is not eligible for auto-execution.`,
+          requires_approval: true,
+          decision_priority: decision?.priority || "LOW",
+        },
+      };
+      console.info(`[autopilot-engine] PENDING (blocked domain): ${domain}:${actionType}`);
+      logAction(null, `autopilot:pending:${actionType}`, log.details);
+      return log;
+    }
+
+    // ── Safety gate 2: not auto-executable or approval needed ───────────
+    if (!autoExec || reqApproval) {
+      const log = {
+        action:      `${domain}:${actionType} — awaiting approval`,
+        status:      "pending",
+        timestamp,
+        domain,
+        action_type: actionType,
+        details: {
+          reason:            !autoExec
+            ? "Decision is not marked auto_executable."
+            : "Decision requires human approval.",
+          requires_approval: true,
+          confidence_pct:    decision?.confidence_pct ?? 0,
+          reasoning:         decision?.reasoning || "",
+        },
+      };
+      console.info(`[autopilot-engine] PENDING: ${domain}:${actionType} — ${log.details.reason}`);
+      logAction(null, `autopilot:pending:${actionType}`, log.details);
+      return log;
+    }
+
+    // ── Execute (simulation only) ────────────────────────────────────────
+    const handler = EXECUTION_HANDLERS[actionType];
+    if (!handler) {
+      // Known AI domain but no handler registered — still safe to pend
+      const log = {
+        action:      `${domain}:${actionType} — no handler registered`,
+        status:      "pending",
+        timestamp,
+        domain,
+        action_type: actionType,
+        details: {
+          reason: `No simulation handler for action_type "${actionType}". Add to EXECUTION_HANDLERS to enable.`,
+          requires_approval: true,
+        },
+      };
+      console.warn(`[autopilot-engine] No handler for action_type="${actionType}" — marked pending`);
+      logAction(null, `autopilot:pending:${actionType}`, log.details);
+      return log;
+    }
+
+    // Run the simulation
+    const simulationDetails = handler(decision);
+
+    const log = {
+      action:      `${domain}:${actionType} — executed (simulated)`,
+      status:      "executed",
+      timestamp,
+      domain,
+      action_type: actionType,
+      details:     simulationDetails,
+    };
+
+    console.info(`[autopilot-engine] EXECUTED (simulated): ${domain}:${actionType}`);
+    logAction(null, `autopilot:executed:${actionType}`, simulationDetails);
+    return log;
+
+  } catch (err) {
+    // Never crash the caller
+    console.error("[autopilot-engine] runDecision error:", err?.message);
+    return {
+      action:      `${domain}:${actionType} — execution error`,
+      status:      "failed",
+      timestamp,
+      domain,
+      action_type: actionType,
+      details: {
+        error:   err?.message || "unknown error",
+        note:    "Safe fallback applied — no changes made.",
+      },
+    };
+  }
 }

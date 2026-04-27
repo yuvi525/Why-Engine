@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { COPY_MAP, getSeverityLabel } from "@/lib/brand-constants";
+import { DomainBadge } from "@/components/DomainBadge";
+import { SavingsCard } from "@/components/SavingsCard";
 
 /* ─────────────────────────────────────────────────────────────
    DecisionCard — extended with:
@@ -132,7 +134,7 @@ function RecommendationsSection({ recommendations }) {
   );
 }
 
-export function DecisionCard({ decision, totalCost, anomalyType, severity, isDemo }) {
+export function DecisionCard({ decision, totalCost, anomalyType, severity, isDemo, domain, estimatedSavings, suggestedModel, fromModel }) {
   const priority  = String(decision?.priority || "LOW").toUpperCase();
   const pConfig   = PRIORITY_CONFIG[priority] || PRIORITY_CONFIG.LOW;
   const actions   = Array.isArray(decision?.action) ? decision.action : [];
@@ -173,11 +175,14 @@ export function DecisionCard({ decision, totalCost, anomalyType, severity, isDem
             )}
           </div>
 
-          {/* Priority badge */}
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 100, fontSize: 10, fontWeight: 700, letterSpacing: "0.22em", textTransform: "uppercase", background: pConfig.bg, border: `1px solid ${pConfig.border}`, color: pConfig.color, whiteSpace: "nowrap", flexShrink: 0 }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: pConfig.dot, flexShrink: 0 }} />
-            {priority}
-          </span>
+          {/* Priority badge + Domain badge row */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            {domain && <DomainBadge domain={domain} size="sm" />}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 100, fontSize: 10, fontWeight: 700, letterSpacing: "0.22em", textTransform: "uppercase", background: pConfig.bg, border: `1px solid ${pConfig.border}`, color: pConfig.color, whiteSpace: "nowrap" }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: pConfig.dot, flexShrink: 0 }} />
+              {priority}
+            </span>
+          </div>
         </div>
 
         {/* Meta chips — AI Spend label from COPY_MAP */}
@@ -250,6 +255,17 @@ export function DecisionCard({ decision, totalCost, anomalyType, severity, isDem
 
         {/* Collapsible recommendations from why_output */}
         <RecommendationsSection recommendations={recommendations} />
+
+        {/* SAVINGS CARD — shown when estimatedSavings provided */}
+        {Number(estimatedSavings) > 0 && (
+          <SavingsCard
+            estimatedSavings={estimatedSavings}
+            requestCount={decision?.rankedContributors?.[0]?.requestCount || 1}
+            suggestedModel={suggestedModel || decision?.suggestedOptimization?.to || "gpt-4o-mini"}
+            fromModel={fromModel || decision?.suggestedOptimization?.from || "gpt-4o"}
+            domain={domain || "ai_cost"}
+          />
+        )}
 
         {/* DECISION */}
         <DecisionBlock label={COPY_MAP.result_label}>

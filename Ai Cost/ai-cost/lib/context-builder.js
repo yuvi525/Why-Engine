@@ -1,3 +1,5 @@
+import { DOMAINS, normaliseDomain } from "@/lib/domains";
+
 function roundValue(value) {
   return Number(Number(value || 0).toFixed(2));
 }
@@ -83,6 +85,73 @@ function deriveCausation(anomalyType, topDriver, anomaly, rawUsage) {
   );
 }
 
+// ── Domain-specific context builders ────────────────────────────────────
+
+/**
+ * buildAWSContext(data)
+ *
+ * Extracts AWS-specific signals: resource utilisation table and
+ * cost-by-service breakdown. Called only when domain === "aws_cost".
+ * Never throws — returns empty object on bad input.
+ */
+function buildAWSContext(data) {
+  try {
+    const resources = Array.isArray(data?.resources) ? data.resources : [];
+    const history   = Array.isArray(data?.history)   ? data.history   : [];
+
+    const utilisation = resources.map(r => ({
+      id:       r?.id      || "unknown",
+      service:  r?.service || "unknown",
+      cpu_pct:  Number(r?.cpu_pct ?? r?.cpu ?? 0).toFixed(1),
+      cost_usd: Number(r?.cost_usd || 0).toFixed(4),
+      status:   Number(r?.cpu_pct ?? r?.cpu ?? 100) < 5 ? "idle" : "active",
+    }));
+
+    const costHistory = history.map(h => ({
+      period:   h?.period   || "",
+      cost_usd: Number(h?.cost_usd || h?.cost || 0).toFixed(2),
+    }));
+
+    return { utilisation, costHistory };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * buildStripeContext(data)
+ *
+ * Extracts Stripe-specific signals: revenue trend, churn rate,
+ * and payment failure stats. Called only when domain === "stripe_revenue".
+ * Never throws — returns empty object on bad input.
+ */
+function buildStripeContext(data) {
+  try {
+    const revenue  = Array.isArray(data?.revenue) ? data.revenue : [];
+    const payments = data?.payments || {};
+
+    const revenueTrend = revenue.map(r => ({
+      period:     r?.period     || "",
+      amount_usd: Number(r?.amount_usd || r?.amount || 0).toFixed(2),
+    }));
+
+    const churnRate     = data?.churn_rate     != null ? Number(data.churn_rate).toFixed(3)     : null;
+    const prevChurnRate = data?.prev_churn_rate != null ? Number(data.prev_churn_rate).toFixed(3) : null;
+
+    const paymentStats = {
+      total:       Number(payments?.total  || 0),
+      failed:      Number(payments?.failed || 0),
+      failedRate:  payments?.total
+        ? ((payments.failed / payments.total) * 100).toFixed(1) + "%"
+        : null,
+    };
+
+    return { revenueTrend, churnRate, prevChurnRate, paymentStats };
+  } catch {
+    return {};
+  }
+}
+
 export function buildContext(data, anomaly, rawUsage) {
   const usage = Array.isArray(rawUsage) ? rawUsage : [];
   const currentCost = roundValue(data?.latestCost);
@@ -121,8 +190,15 @@ export function buildContext(data, anomaly, rawUsage) {
     ? anomaly.contributors
     : [];
 
-  return {
+  // ── Domain branching ────────────────────────────────────────
+  // Resolve domain from anomaly (already stamped by each detector).
+  // Unknown / missing domain falls back to DOMAINS.AI via normaliseDomain.
+  const domain = normaliseDomain(anomaly?.domain);
+
+  // AI context (always built — used as base for ai_cost, and as safe default)
+  const aiContext = {
     anomalyType: anomaly?.type || null,
+    domain,
     summary: {
       currentCost,
       previousCost,
@@ -144,9 +220,21 @@ export function buildContext(data, anomaly, rawUsage) {
       to: data?.suggestedModel || "gpt-4o-mini",
       savings: estimatedWaste,
     },
-    // Full ranked breakdown with per-model cost %, tokens, and real savings.
     rankedContributors: Array.isArray(data?.rankedContributors)
       ? data.rankedContributors
       : [],
   };
+
+  // AWS: merge utilisation + cost history on top of base context
+  if (domain === DOMAINS.AWS) {
+    return { ...aiContext, ...buildAWSContext(data) };
+  }
+
+  // Stripe: merge revenue trend + churn/payment stats
+  if (domain === DOMAINS.STRIPE) {
+    return { ...aiContext, ...buildStripeContext(data) };
+  }
+
+  // ai_cost (default) — return unchanged AI context
+  return aiContext;
 }

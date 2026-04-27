@@ -83,6 +83,23 @@ export function detectCostLeak(data) {
   };
 }
 
+/**
+ * estimateSavingsFromPricing(tokens, priceCurrent, priceAlt)
+ *
+ * Low-level savings calculator — pure arithmetic, no data lookups.
+ * Returns the dollar saving achieved by switching from priceCurrent
+ * to priceAlt for a given token volume.
+ *
+ * @param {number} tokens       - Total token count
+ * @param {number} priceCurrent - Current model price per 1,000 tokens
+ * @param {number} priceAlt     - Alternative model price per 1,000 tokens
+ * @returns {number}            - Estimated saving in USD (≥ 0), or 0 if inputs invalid
+ */
+export function estimateSavingsFromPricing(tokens, priceCurrent, priceAlt) {
+  if (!tokens || !priceCurrent || !priceAlt) return 0;
+  return Math.max(0, (tokens / 1000) * (priceCurrent - priceAlt));
+}
+
 export function estimateSavings(data) {
   const highestCostModel = findHighestCostModel(data);
   const suggestedModel =

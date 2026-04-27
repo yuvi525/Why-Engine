@@ -1,3 +1,5 @@
+import { DOMAINS } from "@/lib/domains";
+
 const EXPENSIVE_MODEL_PATTERNS = [/gpt-4/i, /^o1/i, /^o3/i];
 
 function isExpensiveModel(model) {
@@ -31,15 +33,16 @@ function detectCostSpike(usage) {
   const latestCost = Number(usage[usage.length - 1]?.cost || 0);
   const ratio = latestCost / historicalAvg;
 
-  // Spike threshold: current period cost exceeds 2× the historical average.
-  if (ratio > 2.0) {
+  // Spike threshold: cost increase >50% above historical average (ratio > 1.5).
+  if (ratio > 1.5) {
     return {
       isAnomaly: true,
-      type: "cost_spike",
-      severity: ratio >= 3.0 ? "high" : "medium",
+      type:      "cost_spike",
+      severity:  "high",
       historicalAvg: Number(historicalAvg.toFixed(4)),
-      latestCost: Number(latestCost.toFixed(4)),
-      ratio: Number(ratio.toFixed(2)),
+      latestCost:    Number(latestCost.toFixed(4)),
+      ratio:         Number(ratio.toFixed(2)),
+      details:       `Cost is ${((ratio - 1) * 100).toFixed(0)}% above historical average ($${historicalAvg.toFixed(4)} → $${latestCost.toFixed(4)})`,
     };
   }
 
@@ -60,6 +63,28 @@ function detectModelOveruse(costByModel, totalCost) {
     }))
     .sort((a, b) => b.cost - a.cost);
 
+  // ── Check 1: single model dominates >70% of total cost ───────────────
+  if (contributors.length > 0) {
+    const top      = contributors[0];
+    const topRatio = top.cost / totalCost;
+    if (topRatio > 0.70) {
+      return {
+        isAnomaly:     true,
+        type:          "model_overuse",
+        severity:      "high",
+        dominantModel: top.model,       // kept for backward compat
+        contributors,                   // kept for backward compat
+        details: {
+          model:     top.model,
+          share_pct: top.share,         // e.g. 84.2
+          message:   `${top.model} accounts for ${top.share}% of total cost`,
+        },
+      };
+    }
+  }
+
+  // ── Check 2: expensive models (gpt-4*, o1, o3) collectively >60% ─────
+  // (original logic preserved as a fallback)
   const expensiveShare = contributors
     .filter((c) => isExpensiveModel(c.model))
     .reduce((sum, c) => sum + c.cost, 0);
@@ -72,6 +97,87 @@ function detectModelOveruse(costByModel, totalCost) {
       type: "model_overuse",
       severity: expensiveRatio >= 0.8 ? "high" : "medium",
       contributors,
+      details: `Expensive models account for ${(expensiveRatio * 100).toFixed(0)}% of total cost`,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * detectTokenSpike
+ *
+ * Flags a token_spike anomaly when the most-recent entry's token count
+ * exceeds 2× the average of all historical entries.
+ * Requires at least 2 usage records.
+ */
+function detectTokenSpike(usage) {
+  if (usage.length < 2) return null;
+
+  const historical = usage.slice(0, -1);
+  const latest     = usage[usage.length - 1];
+
+  const avgTokens = historical.reduce((sum, e) => sum + Number(e.tokens || 0), 0)
+    / historical.length;
+
+  if (avgTokens <= 0) return null;
+
+  const latestTokens = Number(latest?.tokens || 0);
+  const ratio        = latestTokens / avgTokens;
+
+  if (ratio > 2.0) {
+    return {
+      isAnomaly:    true,
+      type:         "token_spike",
+      severity:     "high",
+      avgTokens:    Math.round(avgTokens),
+      latestTokens,
+      ratio:        Number(ratio.toFixed(2)),
+      details:      `Token count is ${ratio.toFixed(1)}× above average (${Math.round(avgTokens).toLocaleString()} → ${latestTokens.toLocaleString()} tokens)`,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * detectLoopPattern
+ *
+ * Flags a loop_detected anomaly when the same model appears in ≥3
+ * consecutive usage entries (indicating a retry/tool-call loop).
+ *
+ * Severity: always "critical" — a loop is always an urgent signal.
+ */
+function detectLoopPattern(usage) {
+  if (usage.length < 3) return null;
+
+  let maxRun = 1;
+  let runLen  = 1;
+  let loopModel = null;
+
+  for (let i = 1; i < usage.length; i++) {
+    const prev = String(usage[i - 1]?.model || "").trim().toLowerCase();
+    const curr = String(usage[i]?.model     || "").trim().toLowerCase();
+
+    if (curr && curr === prev) {
+      runLen++;
+      if (runLen > maxRun) {
+        maxRun    = runLen;
+        loopModel = curr;
+      }
+    } else {
+      runLen = 1;
+    }
+  }
+
+  if (maxRun >= 3) {
+    return {
+      isAnomaly:   true,
+      type:        "loop_detected",
+      severity:    "critical",
+      model:       loopModel,
+      repeatCount: maxRun,
+      details:     `${loopModel} called ${maxRun} consecutive times — possible retry loop or tool-call cycle`,
     };
   }
 
@@ -115,12 +221,15 @@ export function detectCostAnomaly(data) {
     detectCostSpike(usage),
     detectModelOveruse(costByModel, totalCost),
     detectMixChange(usage, totalCost),
+    detectTokenSpike(usage),
+    detectLoopPattern(usage),
   ].filter(Boolean);
 
   const severityRank = {
-    low: 1,
-    medium: 2,
-    high: 3,
+    low:      1,
+    medium:   2,
+    high:     3,
+    critical: 4,  // reserved for future escalations
   };
 
   const highestPriority =
@@ -132,10 +241,12 @@ export function detectCostAnomaly(data) {
   if (!highestPriority) {
     return {
       isAnomaly: false,
-      type: null,
-      severity: "low",
+      type:      null,
+      severity:  "low",
+      domain:    DOMAINS.AI,   // always present for multi-domain compat
     };
   }
 
-  return highestPriority;
+  // Stamp domain onto the winner — spread preserves all existing fields.
+  return { ...highestPriority, domain: DOMAINS.AI };
 }

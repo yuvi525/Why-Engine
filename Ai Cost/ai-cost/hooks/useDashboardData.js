@@ -94,7 +94,7 @@ async function fetchRealData(session, cancelled, setAnalyses, setAnomalies, setU
     if (!cancelled) {
       if (aRes?.ok) {
         const d = await aRes.json();
-        if (d?.data) setAnalyses([d.data]);
+        if (d?.analysis) setAnalyses([d.analysis]);
       }
       if (rulesRes?.ok) {
         const d = await rulesRes.json();

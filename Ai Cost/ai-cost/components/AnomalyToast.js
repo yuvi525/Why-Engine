@@ -76,7 +76,7 @@ export function AnomalyToast({ message, severity = "high", visible, onClose }) {
         </svg>
       </button>
 
-      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }`}</style>
+      
     </div>
   );
 }

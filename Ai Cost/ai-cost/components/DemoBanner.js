@@ -61,16 +61,7 @@ export function DemoBanner() {
           {COPY_MAP.cta_connect} →
         </a>
 
-        <style>{`
-          @keyframes demoBannerShimmer {
-            0%   { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-          }
-          @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50%       { opacity: 0.4; }
-          }
-        `}</style>
+        
       </div>
     </>
   );

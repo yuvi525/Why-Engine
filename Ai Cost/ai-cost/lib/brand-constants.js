@@ -6,17 +6,17 @@
  */
 
 export const COPY_MAP = {
-  analyze_button:    "Run Cost Intelligence",
+  analyze_button:    "Run Spend Intelligence",
   analyze_loading:   "Running Intelligence...",
-  dashboard_title:   "AI Cost Intelligence Dashboard",
+  dashboard_title:   "AI Spend Intelligence Hub",
   result_label:      "Decision Insight",
   cost_label:        "AI Spend",
-  anomaly_label:     "Cost Anomaly Detected",
+  anomaly_label:     "Spend Anomaly Detected",
   cta_connect:       "Connect Your AI Infrastructure",
-  badge_active:      "AI Cost Intelligence Engine Active",
-  nav_dashboard:     "Intelligence Dashboard",
+  badge_active:      "AI Spend Intelligence Engine Active",
+  nav_dashboard:     "Intelligence Hub",
   nav_analyze:       "Run Analysis",
-  nav_autopilot:     "Cost Autopilot",
+  nav_autopilot:     "Spend Autopilot",
   nav_usage:         "AI Spend Usage",
   empty_state:       "No AI Spend data yet — connect your infrastructure or explore Demo Mode",
   severity_critical: "Critical Anomaly",
