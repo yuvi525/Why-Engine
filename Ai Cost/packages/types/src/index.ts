@@ -24,8 +24,10 @@ export interface WHYExplanation {
 }
 
 export interface RoutingDecision {
-  provider: 'bedrock' | 'vertex' | 'openai';
-  model: string;
+  provider: 'bedrock' | 'vertex' | 'openai'; // simulated provider
+  model: string;                               // simulated model
+  actualProvider: 'openai';                   // MVP: always openai
+  actualModel: 'gpt-4o-mini';                 // MVP: always gpt-4o-mini
   reasonCode: RoutingReasonCode;
   estimatedCostUSD: number;
   baselineCostUSD: number;

@@ -9,18 +9,19 @@
     "lint": "eslint \"src/**/*.ts*\""
   },
   "dependencies": {
+    "@vela/core": "workspace:*",
+    "@vela/db": "workspace:*",
+    "@vela/types": "workspace:*",
+    "dotenv": "^16.4.5",
     "fastify": "^4.26.0",
     "litellm": "^0.0.1",
     "nanoid": "^3.3.7",
-    "dotenv": "^16.4.5",
-    "@vela/core": "workspace:*",
-    "@vela/db": "workspace:*",
-    "@vela/types": "workspace:*"
+    "openai": "^6.34.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
     "@types/node": "^20.0.0",
+    "@vela/eslint-config": "workspace:*",
     "@vela/tsconfig": "workspace:*",
-    "@vela/eslint-config": "workspace:*"
+    "typescript": "^5.4.0"
   }
 }

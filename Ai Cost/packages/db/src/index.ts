@@ -5,6 +5,45 @@ import { DecisionLog } from '@vela/types';
 import { eq, desc, sum, count } from 'drizzle-orm';
 
 const sqlite = new Database(process.env.DB_PATH || './vela.db');
+
+// Auto-create tables (no migration step needed)
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS decision_logs (
+    id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    user_id TEXT DEFAULT 'anonymous',
+    timestamp INTEGER NOT NULL,
+    original_model TEXT,
+    routed_provider TEXT,
+    routed_model TEXT,
+    reason_code TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    actual_cost_usd REAL,
+    baseline_cost_usd REAL,
+    savings_usd REAL,
+    latency_ms INTEGER,
+    why_json TEXT,
+    status TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS budget_state (
+    id TEXT PRIMARY KEY,
+    daily_budget_usd REAL DEFAULT 5.0,
+    spent_today_usd REAL DEFAULT 0,
+    spent_total_usd REAL DEFAULT 0,
+    reset_date TEXT,
+    updated_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS provider_health (
+    provider TEXT PRIMARY KEY,
+    is_healthy INTEGER DEFAULT 1,
+    last_error TEXT,
+    checked_at INTEGER
+  );
+`);
+
 export const db = drizzle(sqlite, { schema });
 export { schema };
 

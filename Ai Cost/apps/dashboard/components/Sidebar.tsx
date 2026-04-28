@@ -7,10 +7,11 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   const navItems = [
-    { label: 'Dashboard', path: '/', icon: '📊' },
-    { label: 'Decisions', path: '/decisions', icon: '⚡' },
-    { label: 'Usage', path: '/usage', icon: '📈' },
-    { label: 'Settings', path: '/settings', icon: '⚙️' },
+    { label: 'Dashboard',  path: '/',         icon: '📊' },
+    { label: 'Live Demo',  path: '/demo',      icon: '🚀' },
+    { label: 'Decisions',  path: '/decisions', icon: '⚡' },
+    { label: 'Usage',      path: '/usage',     icon: '📈' },
+    { label: 'Settings',   path: '/settings',  icon: '⚙️' },
   ];
 
   return (
