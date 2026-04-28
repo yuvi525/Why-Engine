@@ -1,0 +1,19 @@
+{
+  "name": "@vela/core",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint \"src/**/*.ts*\""
+  },
+  "dependencies": {
+    "@vela/types": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@vela/tsconfig": "workspace:*",
+    "@vela/eslint-config": "workspace:*"
+  }
+}

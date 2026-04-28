@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Fastify",
+  "extends": "./base.json",
+  "compilerOptions": {
+    "moduleResolution": "node",
+    "outDir": "dist"
+  }
+}

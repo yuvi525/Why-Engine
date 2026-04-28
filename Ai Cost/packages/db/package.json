@@ -1,0 +1,23 @@
+{
+  "name": "@vela/db",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint \"src/**/*.ts*\"",
+    "generate": "drizzle-kit generate:sqlite"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.30.0",
+    "better-sqlite3": "^9.4.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.20.0",
+    "@types/better-sqlite3": "^7.6.9",
+    "typescript": "^5.4.0",
+    "@vela/tsconfig": "workspace:*",
+    "@vela/eslint-config": "workspace:*"
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "extends": "@vela/tsconfig/fastify.json",
+  "include": ["src"]
+}
