@@ -1,0 +1,95 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── Dark-first Vela Design System ── */
+    --background:           #0a0a0f;
+    --foreground:           #f0f0f5;
+
+    --card:                 #111118;
+    --card-foreground:      #f0f0f5;
+
+    --popover:              #111118;
+    --popover-foreground:   #f0f0f5;
+
+    --primary:              #10b981;
+    --primary-foreground:   #ffffff;
+
+    --secondary:            #1a1a24;
+    --secondary-foreground: #c4c4cc;
+
+    --muted:                #1a1a24;
+    --muted-foreground:     #6b6b7e;
+
+    --accent:               #1f1f2c;
+    --accent-foreground:    #f0f0f5;
+
+    --destructive:          #ef4444;
+    --destructive-foreground: #fafafa;
+
+    --border:               #1e1e2a;
+    --input:                #1e1e2a;
+    --ring:                 #10b981;
+    --radius:               0.75rem;
+
+    /* Glow */
+    --glow-primary:         rgba(16, 185, 129, 0.15);
+    --glow-strong:          rgba(16, 185, 129, 0.3);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--secondary);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+  }
+}
+
+/* Gradient text utility */
+.text-gradient {
+  @apply bg-clip-text text-transparent;
+  background-image: linear-gradient(135deg, #10b981, #34d399);
+}
+
+/* Premium glow effect */
+.glow-green {
+  box-shadow: 0 0 24px var(--glow-primary);
+}
+
+/* Glass card */
+.glass-card {
+  background: rgba(17, 17, 24, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Number font feature */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

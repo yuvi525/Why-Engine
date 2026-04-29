@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/reset-budgets",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}

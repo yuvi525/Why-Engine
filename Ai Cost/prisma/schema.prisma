@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./vela.db"
+}
+
+model User {
+  id              String        @id @default(uuid())
+  email           String        @unique
+  encryptedApiKey String?       // AES-256-GCM encrypted OpenAI key
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  apiKeys         ApiKey[]
+  budgetState     BudgetState?
+  decisionLogs    DecisionLog[]
+}
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  userId      String
+  keyHash     String    @unique  // SHA-256 of full key
+  keyPrefix   String              // first 12 chars for display: "vk_live_abc1"
+  label       String?
+  isActive    Boolean   @default(true)
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([keyHash])
+  @@index([userId])
+}
+
+model BudgetState {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  dailyLimitMicro     Int      @default(5000000)   // $5.00 default
+  autoDowngradeAt     Float    @default(0.80)       // 80%
+  spentTodayMicro     Int      @default(0)
+  baselineTodayMicro  Int      @default(0)
+  totalSpentMicro     Int      @default(0)
+  totalBaselineMicro  Int      @default(0)
+  requestsToday       Int      @default(0)
+  cacheHitsToday      Int      @default(0)
+  lastResetAt         DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model DecisionLog {
+  id                String   @id @default(uuid())
+  userId            String
+  requestId         String   @unique @default(uuid())
+  model             String   // "gpt-4o" | "gpt-4o-mini"
+  reasonCode        String   // "COMPLEXITY_LOW" | "COMPLEXITY_HIGH" | etc.
+  inputTokens       Int
+  outputTokens      Int
+  actualCostMicro   Int
+  baselineCostMicro Int
+  savingsMicro      Int
+  savingsPct        Int
+  isCacheHit        Boolean  @default(false)
+  promptPreview     String?  // first 100 chars (truncated)
+  createdAt         DateTime @default(now())
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+}

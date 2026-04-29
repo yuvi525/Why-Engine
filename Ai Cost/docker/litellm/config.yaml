@@ -1,0 +1,21 @@
+model_list:
+  - model_name: vela-mini
+    litellm_params:
+      model: gpt-4o-mini
+      # api_key passed per-request via Authorization header
+
+  - model_name: vela-pro
+    litellm_params:
+      model: gpt-4o
+      # api_key passed per-request via Authorization header
+
+litellm_settings:
+  drop_params: false
+  success_callback: []
+  failure_callback: []
+  # Pass through user's OpenAI key from Authorization header
+  forward_client_credentials_to_llm_api: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  disable_spend_logs: true
