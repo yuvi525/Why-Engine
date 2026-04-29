@@ -317,7 +317,7 @@ export default function DashboardPage() {
           icon={<DollarSign className="w-5 h-5" />}
           label="Total Spent"
           value={`$${(s.spentTodayMicro / 1e6).toFixed(4)}`}
-          sub="Today's AI cost"
+          sub="Today's cost"
           delay={0.1}
         />
         <StatCard

@@ -54,7 +54,7 @@ export default function LoginPage() {
             {mode === 'login' ? 'Welcome back' : 'Create account'}
           </h1>
           <p className="text-sm text-muted-foreground mb-6">
-            {mode === 'login' ? 'Sign in to your Vela dashboard.' : 'Start saving on AI costs today.'}
+            {mode === 'login' ? 'Sign in to your Vela dashboard.' : 'Start saving with Vela today.'}
           </p>
 
           {error && (
@@ -109,7 +109,7 @@ export default function LoginPage() {
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-6 opacity-50">
-          Vela AI Cost Autopilot · Powered by LiteLLM
+          Vela Autopilot · Powered by LiteLLM
         </p>
       </motion.div>
     </div>

@@ -2,8 +2,8 @@ import './globals.css'
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
-  title: 'Vela — AI Cost Autopilot',
-  description: 'Reduce AI costs by up to 90% with intelligent model routing.',
+  title: 'Vela Autopilot',
+  description: 'Reduce costs by up to 90% with intelligent model routing.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
