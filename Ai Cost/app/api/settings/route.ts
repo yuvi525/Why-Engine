@@ -1,23 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabase } from '@/lib/supabase-server'
 import { prisma } from '@/lib/prisma'
-import { encrypt } from '@/lib/crypto'
+import { encrypt, decrypt } from '@/lib/crypto'
 import { redis } from '@/lib/redis'
+import { PLAN_LIMITS, Plan } from '@/lib/plans'
 
 export async function GET() {
   const supabase = await createServerSupabase()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const budget = await prisma.budgetState.findUnique({
-    where: { userId: user.id },
-    select: { dailyLimitMicro: true, autoDowngradeAt: true },
-  })
+  const [budget, userRow] = await Promise.all([
+    prisma.budgetState.findUnique({
+      where: { userId: user.id },
+      select: { dailyLimitMicro: true, autoDowngradeAt: true, requestsToday: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: user.id },
+      select: { encryptedApiKey: true, plan: true },
+    }),
+  ])
 
-  const hasApiKey = !!(await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { encryptedApiKey: true },
-  }))?.encryptedApiKey
+  const hasApiKey = !!userRow?.encryptedApiKey
+  const userPlan  = (userRow?.plan ?? 'free') as Plan
+
+  // Derive masked key prefix for display (e.g. "sk-proj-...")
+  let keyMask: string | null = null
+  if (userRow?.encryptedApiKey) {
+    try {
+      const { decrypt: dec } = await import('@/lib/crypto')
+      const raw = dec(userRow.encryptedApiKey)
+      keyMask = raw.slice(0, 8) + '…' + raw.slice(-4)
+    } catch { keyMask = 'sk-****' }
+  }
 
   // Read feature flags (fail open — defaults to off)
   let v2RoutingEnabled = false
@@ -30,8 +45,12 @@ export async function GET() {
 
   return NextResponse.json({
     hasApiKey,
-    dailyLimitUsd:    (budget?.dailyLimitMicro ?? 5_000_000) / 1_000_000,
-    autoDowngradeAt:  budget?.autoDowngradeAt ?? 0.8,
+    keyMask,
+    plan:           userPlan,
+    planConfig:     PLAN_LIMITS[userPlan],
+    requestsToday:  budget?.requestsToday    ?? 0,
+    dailyLimitUsd:  (budget?.dailyLimitMicro ?? 5_000_000) / 1_000_000,
+    autoDowngradeAt: budget?.autoDowngradeAt ?? 0.8,
     v2RoutingEnabled,
     v2WhyEnabled,
   })
@@ -53,11 +72,17 @@ export async function POST(req: NextRequest) {
 
   // Update OpenAI key if provided
   if (body.openAiKey) {
-    if (!body.openAiKey.startsWith('sk-')) {
-      return NextResponse.json({ error: 'Invalid OpenAI API key format' }, { status: 400 })
+    const key = body.openAiKey.trim()
+    if (!key.startsWith('sk-') || key.length < 20) {
+      return NextResponse.json({ error: 'Invalid OpenAI API key — must start with sk- and be at least 20 characters.' }, { status: 400 })
     }
-    const encryptedApiKey = encrypt(body.openAiKey)
+    const encryptedApiKey = encrypt(key)
     await prisma.user.update({ where: { id: user.id }, data: { encryptedApiKey } })
+  }
+
+  // Remove OpenAI key
+  if (body.removeOpenAiKey === true) {
+    await prisma.user.update({ where: { id: user.id }, data: { encryptedApiKey: null } })
   }
 
   // Update budget settings if provided

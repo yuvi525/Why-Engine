@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { TrendingUp, Zap, ArrowUpRight, DollarSign, Activity, ChevronDown } from 'lucide-react'
+import { TrendingUp, Zap, ArrowUpRight, DollarSign, Activity, ChevronDown, Shield, AlertTriangle } from 'lucide-react'
 
 interface Stats {
   savingsTodayMicro: number
@@ -231,23 +231,26 @@ function WhyPanel({ log, onClose }: { log: Log | null; onClose: () => void }) {
 }
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [logs, setLogs] = useState<Log[]>([])
+  const [stats, setStats]           = useState<Stats | null>(null)
+  const [logs, setLogs]             = useState<Log[]>([])
   const [selectedLog, setSelectedLog] = useState<Log | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [error, setError]           = useState<string | null>(null)
+  const [loading, setLoading]       = useState(true)
+  const [byokOk, setByokOk]         = useState<boolean | null>(null) // null = loading
 
   useEffect(() => {
-    fetch('/api/decisions?limit=20')
-      .then(r => {
-        if (r.status === 401) throw new Error('auth')
-        if (!r.ok) throw new Error(`API error ${r.status}`)
-        return r.json()
-      })
-      .then(data => {
-        console.log('[Dashboard] Received API Data:', data)
-        setStats(data.stats)
-        setLogs(data.logs || [])
+    // Fetch decisions + settings in parallel
+    Promise.all([
+      fetch('/api/decisions?limit=20'),
+      fetch('/api/settings'),
+    ])
+      .then(async ([decRes, settRes]) => {
+        if (decRes.status === 401) throw new Error('auth')
+        if (!decRes.ok) throw new Error(`API error ${decRes.status}`)
+        const [decData, settData] = await Promise.all([decRes.json(), settRes.ok ? settRes.json() : null])
+        setStats(decData.stats)
+        setLogs(decData.logs || [])
+        if (settData) setByokOk(settData.hasApiKey === true)
       })
       .catch(err => {
         if (err.message === 'auth') setError('auth')
@@ -302,6 +305,35 @@ export default function DashboardPage() {
         </h1>
         <p className="text-muted-foreground mt-2 text-sm">Real-time AI routing intelligence. Every request optimized.</p>
       </motion.div>
+
+      {/* BYOK warning banner */}
+      <AnimatePresence>
+        {byokOk === false && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="flex items-start gap-4 bg-amber-900/20 border border-amber-900/40 rounded-2xl p-5"
+          >
+            <div className="w-9 h-9 rounded-xl bg-amber-900/40 flex items-center justify-center flex-shrink-0">
+              <AlertTriangle className="w-4.5 h-4.5 text-amber-400" />
+            </div>
+            <div className="flex-1">
+              <p className="font-semibold text-amber-400 text-sm mb-0.5">OpenAI API Key Required</p>
+              <p className="text-xs text-muted-foreground mb-3">
+                Vela needs your OpenAI key to route and proxy requests. Without it, all proxy calls will fail with a 422 error.
+              </p>
+              <a
+                href="/settings"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border border-amber-900/50 rounded-lg text-xs font-semibold transition"
+              >
+                <Shield className="w-3 h-3" />
+                Add key in Settings →
+              </a>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -16,6 +16,7 @@ model User {
   id              String        @id @default(uuid())
   email           String        @unique
   encryptedApiKey String?       // AES-256-GCM encrypted OpenAI key
+  plan            String        @default("free")  // "free" | "pro" | "scale"
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 

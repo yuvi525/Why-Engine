@@ -2,9 +2,10 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, ListTree, Settings, Zap, LogOut } from 'lucide-react'
+import { LayoutDashboard, ListTree, Settings, Zap, LogOut, ShieldCheck, AlertTriangle } from 'lucide-react'
 import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 
 const nav = [
   { href: '/dashboard',  label: 'Dashboard',  icon: LayoutDashboard },
@@ -12,9 +13,48 @@ const nav = [
   { href: '/settings',   label: 'Settings',    icon: Settings },
 ]
 
+const PLAN_LABELS: Record<string, string> = {
+  free:  'Free',
+  pro:   'Pro',
+  scale: 'Scale',
+}
+
+const PLAN_COLORS: Record<string, string> = {
+  free:  'text-muted-foreground',
+  pro:   'text-blue-400',
+  scale: 'text-amber-400',
+}
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const router = useRouter()
+  const router   = useRouter()
+
+  // Live sidebar status — fetched once from /api/settings
+  const [sidebarStatus, setSidebarStatus] = useState<{
+    plan: string
+    hasApiKey: boolean
+    requestsToday: number
+    dailyLimit: number
+    usagePct: number
+  } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return
+        const limit    = d.planConfig?.requestsPerDay ?? 50
+        const usagePct = limit === -1 ? 0 : Math.min(Math.round((d.requestsToday / limit) * 100), 100)
+        setSidebarStatus({
+          plan:          d.plan ?? 'free',
+          hasApiKey:     d.hasApiKey ?? false,
+          requestsToday: d.requestsToday ?? 0,
+          dailyLimit:    limit,
+          usagePct,
+        })
+      })
+      .catch(() => { /* sidebar status is non-critical */ })
+  }, [])
 
   const handleSignOut = async () => {
     const supabase = createBrowserSupabase()
@@ -59,11 +99,61 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </nav>
 
         {/* Footer */}
-        <div className="p-3 border-t border-border">
-          <div className="bg-primary/5 border border-primary/10 rounded-xl px-3 py-2.5 mb-2">
-            <p className="text-[10px] font-semibold text-primary uppercase tracking-widest">Autopilot Active</p>
-            <p className="text-xs text-muted-foreground mt-0.5">All requests optimized</p>
-          </div>
+        <div className="p-3 border-t border-border space-y-2">
+
+          {/* BYOK warning — shown when no OpenAI key */}
+          {sidebarStatus && !sidebarStatus.hasApiKey && (
+            <Link
+              href="/settings"
+              className="flex items-start gap-2 bg-amber-900/20 border border-amber-900/40 rounded-xl px-3 py-2.5 hover:bg-amber-900/30 transition"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-[10px] font-semibold text-amber-400 uppercase tracking-widest">Key Required</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Add your OpenAI key in Settings</p>
+              </div>
+            </Link>
+          )}
+
+          {/* Autopilot status / plan info */}
+          {sidebarStatus ? (
+            <div className="bg-primary/5 border border-primary/10 rounded-xl px-3 py-2.5">
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1.5">
+                  <ShieldCheck className="w-3 h-3 text-primary" />
+                  <p className="text-[10px] font-semibold text-primary uppercase tracking-widest">
+                    {sidebarStatus.hasApiKey ? 'Autopilot Active' : 'Autopilot Paused'}
+                  </p>
+                </div>
+                <span className={`text-[10px] font-bold uppercase tracking-wider ${PLAN_COLORS[sidebarStatus.plan] ?? 'text-muted-foreground'}`}>
+                  {PLAN_LABELS[sidebarStatus.plan] ?? sidebarStatus.plan}
+                </span>
+              </div>
+              {/* Usage mini-bar */}
+              {sidebarStatus.dailyLimit !== -1 && (
+                <>
+                  <div className="h-1 bg-secondary rounded-full overflow-hidden mt-1.5">
+                    <div
+                      className={`h-full rounded-full transition-all ${sidebarStatus.usagePct >= 80 ? 'bg-amber-400' : 'bg-primary'}`}
+                      style={{ width: `${sidebarStatus.usagePct}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    {sidebarStatus.requestsToday} / {sidebarStatus.dailyLimit} requests today
+                  </p>
+                </>
+              )}
+              {sidebarStatus.dailyLimit === -1 && (
+                <p className="text-xs text-muted-foreground mt-0.5">Unlimited requests</p>
+              )}
+            </div>
+          ) : (
+            <div className="bg-primary/5 border border-primary/10 rounded-xl px-3 py-2.5">
+              <p className="text-[10px] font-semibold text-primary uppercase tracking-widest">Autopilot Active</p>
+              <p className="text-xs text-muted-foreground mt-0.5">All requests optimized</p>
+            </div>
+          )}
+
           <button
             onClick={handleSignOut}
             className="flex items-center gap-2 text-muted-foreground hover:text-foreground text-xs px-3 py-2 rounded-lg hover:bg-secondary transition w-full"

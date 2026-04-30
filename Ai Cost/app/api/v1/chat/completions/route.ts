@@ -13,6 +13,7 @@ import { generateWHY } from '@/lib/proxy/why'
 import { generateWHY_v2 } from '@/lib/proxy/why-v2'
 import { computeQualitySignal, detectRetry } from '@/lib/proxy/feedback'
 import { updateUserContext, getUserContext } from '@/lib/proxy/context'
+import { PLAN_LIMITS, isOverRequestLimit, Plan } from '@/lib/plans'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest) {
   const [user, budgetState] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
-      select: { encryptedApiKey: true },
+      select: { encryptedApiKey: true, plan: true },
     }),
     prisma.budgetState.upsert({
       where: { userId },
@@ -88,6 +89,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: { message: 'OpenAI API key not configured. Add it in Vela Settings.', type: 'config_error', code: 422 } },
       { status: 422 }
+    )
+  }
+
+  // ── 4b. PLAN LIMIT ENFORCEMENT ──────────────────────────────────────
+  const userPlan = (user.plan ?? 'free') as Plan
+  if (isOverRequestLimit(userPlan, budgetState.requestsToday)) {
+    const limit = PLAN_LIMITS[userPlan].requestsPerDay
+    return NextResponse.json(
+      {
+        error: {
+          message: `Daily request limit reached (${limit} requests/${userPlan} plan). Upgrade your plan to continue.`,
+          type:    'plan_limit_exceeded',
+          code:    429,
+          plan:    userPlan,
+          limit,
+        },
+        vela: { requestId, reasonCode: 'PLAN_LIMIT' },
+      },
+      { status: 429 }
     )
   }
 
