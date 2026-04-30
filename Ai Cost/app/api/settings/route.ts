@@ -103,11 +103,20 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  // ── Feature flags ────────────────────────────────────────────────
-  // enableV2Routing: boolean — activates 5-tier decideV2() for this user
-  // enableV2Why:     boolean — activates personalized WHY v2 explanations
+  // ── Feature flags ───────────────────────────────────────────────
+  // enableV2Routing: requires pro+ plan — validate plan server-side
+  // enableV2Why:     available to all plans
   const flagUpdates: Record<string, string> = {}
   if (body.enableV2Routing !== undefined) {
+    const currentPlan = (await prisma.user.findUnique({
+      where: { id: user.id }, select: { plan: true },
+    }))?.plan ?? 'free'
+    if (body.enableV2Routing === true && !PLAN_LIMITS[currentPlan as Plan]?.v2RoutingAllowed) {
+      return NextResponse.json(
+        { error: 'V2 Routing requires a Pro or Scale plan.' },
+        { status: 403 }
+      )
+    }
     flagUpdates['use_v2_routing'] = body.enableV2Routing ? '1' : '0'
   }
   if (body.enableV2Why !== undefined) {

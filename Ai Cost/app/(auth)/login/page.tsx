@@ -29,7 +29,8 @@ export default function LoginPage() {
       setError(authError.message)
       setLoading(false)
     } else {
-      router.push('/dashboard')
+      // New signups go to settings first — forces BYOK configuration
+      router.push(mode === 'signup' ? '/settings' : '/dashboard')
     }
   }
 

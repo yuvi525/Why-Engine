@@ -92,7 +92,34 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── 4b. PLAN LIMIT ENFORCEMENT ──────────────────────────────────────
+  // ── 4b. DATE-DRIFT GUARD ───────────────────────────────────────────
+  // If the reset cron fails, requestsToday stays stale and permanently blocks
+  // free users. This guard detects a missed reset and fixes it inline.
+  const midnightToday = new Date()
+  midnightToday.setUTCHours(0, 0, 0, 0)
+  if (budgetState.lastResetAt < midnightToday) {
+    try {
+      await prisma.budgetState.update({
+        where: { userId },
+        data: {
+          requestsToday:      0,
+          spentTodayMicro:    0,
+          baselineTodayMicro: 0,
+          cacheHitsToday:     0,
+          lastResetAt:        new Date(),
+        },
+      })
+      // Update in-memory reference so plan check below uses fresh count
+      budgetState.requestsToday   = 0
+      budgetState.spentTodayMicro = 0
+      console.log(`[vela] Date-drift reset for userId: ${userId}`)
+    } catch (err) {
+      console.error('[vela] Date-drift reset failed:', err)
+      // Fail open — don't block the user, just log
+    }
+  }
+
+  // ── 4c. PLAN LIMIT ENFORCEMENT ────────────────────────────────────
   const userPlan = (user.plan ?? 'free') as Plan
   if (isOverRequestLimit(userPlan, budgetState.requestsToday)) {
     const limit = PLAN_LIMITS[userPlan].requestsPerDay
