@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Key, Plus, Trash2, Settings, Copy, Check } from 'lucide-react'
+import { Key, Plus, Trash2, Settings, Copy, Check, Zap, FlaskConical } from 'lucide-react'
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -17,14 +17,27 @@ function CopyButton({ text }: { text: string }) {
 }
 
 export default function SettingsPage() {
-  const [keys, setKeys] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
-  const [newKey, setNewKey] = useState<string | null>(null)
+  const [keys, setKeys]               = useState<any[]>([])
+  const [loading, setLoading]         = useState(false)
+  const [newKey, setNewKey]           = useState<string | null>(null)
+  const [v2Routing, setV2Routing]     = useState(false)
+  const [v2Why, setV2Why]             = useState(false)
+  const [flagSaving, setFlagSaving]   = useState(false)
 
   const fetchKeys = () =>
     fetch('/api/keys').then(r => r.json()).then(d => setKeys(d.keys || []))
 
-  useEffect(() => { fetchKeys() }, [])
+  useEffect(() => {
+    fetchKeys()
+    // Load current flag state from settings API
+    fetch('/api/settings')
+      .then(r => r.json())
+      .then(d => {
+        setV2Routing(d.v2RoutingEnabled ?? false)
+        setV2Why(d.v2WhyEnabled ?? false)
+      })
+      .catch(() => { /* non-critical */ })
+  }, [])
 
   const createKey = async () => {
     setLoading(true)
@@ -43,6 +56,19 @@ export default function SettingsPage() {
     if (!confirm('Revoke this API key? This cannot be undone.')) return
     await fetch(`/api/keys/${id}`, { method: 'DELETE' })
     fetchKeys()
+  }
+
+  const saveFlags = async (patch: { enableV2Routing?: boolean; enableV2Why?: boolean }) => {
+    setFlagSaving(true)
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+    } catch { /* non-critical */ } finally {
+      setFlagSaving(false)
+    }
   }
 
   return (
@@ -160,6 +186,80 @@ const response = await client.chat.completions.create({
   messages: [{ role: 'user', content: 'Hello!' }]
 })`}
           </pre>
+        </div>
+      </motion.div>
+
+      {/* V2 Features section */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.3 }}
+        className="bg-card border border-border rounded-2xl overflow-hidden"
+      >
+        <div className="px-6 py-4 border-b border-border flex items-center gap-2 bg-secondary/20">
+          <FlaskConical className="w-4 h-4 text-muted-foreground" />
+          <h2 className="font-semibold text-foreground text-sm">V2 Features</h2>
+          <span className="text-[10px] font-semibold bg-amber-900/30 text-amber-400 px-2 py-0.5 rounded-full uppercase tracking-wider">Beta</span>
+        </div>
+
+        <div className="divide-y divide-border/50">
+          {/* V2 Routing toggle */}
+          <div className="px-6 py-5 flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Zap className="w-4 h-4 text-primary" />
+                <span className="text-sm font-medium text-foreground">V2 Routing</span>
+              </div>
+              <p className="text-xs text-muted-foreground max-w-sm">
+                5-tier complexity scoring for more precise model selection. Requires shadow data to be meaningful.
+              </p>
+            </div>
+            <button
+              id="toggle-v2-routing"
+              disabled={flagSaving}
+              onClick={() => {
+                const next = !v2Routing
+                setV2Routing(next)
+                saveFlags({ enableV2Routing: next })
+              }}
+              className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${
+                v2Routing ? 'bg-primary' : 'bg-secondary'
+              } disabled:opacity-50`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
+                v2Routing ? 'translate-x-5' : 'translate-x-0'
+              }`} />
+            </button>
+          </div>
+
+          {/* V2 WHY toggle */}
+          <div className="px-6 py-5 flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <Zap className="w-4 h-4 text-primary" />
+                <span className="text-sm font-medium text-foreground">Personalized WHY Explanations</span>
+              </div>
+              <p className="text-xs text-muted-foreground max-w-sm">
+                WHY explanations reference your personal usage history (request count, quality rates, total savings).
+              </p>
+            </div>
+            <button
+              id="toggle-v2-why"
+              disabled={flagSaving}
+              onClick={() => {
+                const next = !v2Why
+                setV2Why(next)
+                saveFlags({ enableV2Why: next })
+              }}
+              className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${
+                v2Why ? 'bg-primary' : 'bg-secondary'
+              } disabled:opacity-50`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
+                v2Why ? 'translate-x-5' : 'translate-x-0'
+              }`} />
+            </button>
+          </div>
         </div>
       </motion.div>
     </div>

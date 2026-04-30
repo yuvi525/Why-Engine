@@ -10,8 +10,9 @@ import { decide, ReasonCode } from '@/lib/proxy/decide'
 import { decideV2, runShadowDecision } from '@/lib/proxy/decideV2'
 import { computeCost, estimateTokens, PRICING } from '@/lib/proxy/cost'
 import { generateWHY } from '@/lib/proxy/why'
+import { generateWHY_v2 } from '@/lib/proxy/why-v2'
 import { computeQualitySignal, detectRetry } from '@/lib/proxy/feedback'
-import { updateUserContext } from '@/lib/proxy/context'
+import { updateUserContext, getUserContext } from '@/lib/proxy/context'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -176,31 +177,62 @@ export async function POST(req: NextRequest) {
     }
   } catch { /* cache miss is fine */ }
 
-  // ── 8. CLASSIFY + DECIDE (V1 — executes production routing) ──────────
+  // ── 8. CLASSIFY + DECIDE ─────────────────────────────────────────────
   const inputText = messages.map((m: any) => m.content ?? '').join('\n')
   const inputTokens = estimateTokens(inputText)
   const classifierInput: ClassifierInput = { messages, totalInputTokens: inputTokens }
   const complexity = classify(classifierInput)
+  const budgetPct  = Math.round((redisSpent / budgetState.dailyLimitMicro) * 100)
+
+  // ── Read feature flags + provider health in parallel (non-blocking) ──
+  // All fail open — a Redis error here never stops a request.
+  const [flags, providerHealth] = await Promise.all([
+    redis.hgetall<Record<string, string>>(`flags:${userId}`).catch(() => null),
+    redis.get<{ degraded: boolean }>('health:openai').catch(() => null),
+  ])
+
+  const useV2Routing = flags?.use_v2_routing === '1'
+  const useV2Why     = flags?.use_v2_why     === '1'
+
+  if (providerHealth?.degraded) {
+    // Log degradation — proxy still attempts the request (fail open by design)
+    console.warn('[vela] Provider health: openai degraded — attempting request anyway')
+  }
+
+  // ── V1 routing (always runs as ground truth) ──────────────────────
   const routing = decide(complexity, apAction)
 
-  // BUG FIX: use realModel from routing decision — not hardcoded 'gpt-4o-mini'
-  const realModel = MODEL_MAP[routing.model] as RealModel
+  // ── V2 routing: active mode if flag set, shadow mode otherwise ────
+  let realModel = MODEL_MAP[routing.model] as RealModel
 
-  const budgetPct = Math.round((redisSpent / budgetState.dailyLimitMicro) * 100)
+  if (useV2Routing) {
+    // V2 is active for this user — use V2 decision directly
+    const v2Decision = await decideV2(
+      { messages, totalInputTokens: inputTokens },
+      apAction,
+      false // shadowOnly = false: V2 is active
+    ).catch(() => null)
 
-  // Phase 1: Run V2 in shadow mode (logs divergence, never affects routing)
-  void (async () => {
-    try {
-      const v2Decision = await decideV2(
-        { messages, totalInputTokens: inputTokens },
-        apAction,
-        true // shadowOnly = true
-      )
-      await runShadowDecision(prisma, requestId, userId, routing, v2Decision)
-    } catch {
-      // Shadow errors are always swallowed
+    if (v2Decision) {
+      realModel = MODEL_MAP[v2Decision.model] as RealModel
+      // Still log shadow record so we can track V1 vs V2 divergence
+      void runShadowDecision(prisma, requestId, userId, routing, v2Decision)
     }
-  })()
+  } else {
+    // Shadow mode: V2 decision is computed but V1 routing executes
+    void (async () => {
+      try {
+        const v2Decision = await decideV2(
+          { messages, totalInputTokens: inputTokens },
+          apAction,
+          true // shadowOnly = true
+        )
+        await runShadowDecision(prisma, requestId, userId, routing, v2Decision)
+      } catch {
+        // Shadow errors are always swallowed
+      }
+    })()
+  }
 
   // ── 9. EXECUTE via OpenAI ─────────────────────────────────────────────
   // Uses realModel (from routing decision) — Bug 1 fixed.
@@ -278,13 +310,22 @@ export async function POST(req: NextRequest) {
       },
       flush(controller) {
         const costResult = computeCost(realModel, inputTokens, outputTokens)
-        const why = generateWHY(routing.reasonCode, {
-          model: realModel,
-          ...costResult,
-          budgetPct,
-          spentTodayMicro: redisSpent,
-          dailyLimitMicro: budgetState.dailyLimitMicro
-        })
+
+        // WHY V2 if flag set and context is available, else V1 fallback
+        let why
+        if (useV2Why) {
+          const userCtx = getUserContext(redis, userId).catch(() => null)
+          // In flush we can't await, so we use V1 for streaming (context available next request)
+          why = generateWHY(routing.reasonCode, {
+            model: realModel, ...costResult, budgetPct,
+            spentTodayMicro: redisSpent, dailyLimitMicro: budgetState.dailyLimitMicro,
+          })
+        } else {
+          why = generateWHY(routing.reasonCode, {
+            model: realModel, ...costResult, budgetPct,
+            spentTodayMicro: redisSpent, dailyLimitMicro: budgetState.dailyLimitMicro,
+          })
+        }
 
         const metaChunk = `\n: vela ${JSON.stringify({
           requestId,
@@ -326,13 +367,21 @@ export async function POST(req: NextRequest) {
   const finishReason: string | undefined = responseBody.choices?.[0]?.finish_reason
   const latencyMs = Date.now() - reqStartMs
   const costResult = computeCost(realModel, inputTokens, outputTokens)
-  const why = generateWHY(routing.reasonCode, {
-    model: realModel,
-    ...costResult,
-    budgetPct,
-    spentTodayMicro: redisSpent,
-    dailyLimitMicro: budgetState.dailyLimitMicro
-  })
+
+  // WHY V2 if flag set, with graceful fallback to V1
+  const whyCtx = {
+    model: realModel, ...costResult, budgetPct,
+    spentTodayMicro: redisSpent, dailyLimitMicro: budgetState.dailyLimitMicro,
+  }
+  let why
+  if (useV2Why) {
+    const userCtx = await getUserContext(redis, userId).catch(() => null)
+    why = userCtx
+      ? generateWHY_v2(routing.reasonCode, whyCtx, userCtx)
+      : generateWHY(routing.reasonCode, whyCtx)
+  } else {
+    why = generateWHY(routing.reasonCode, whyCtx)
+  }
 
   // Cache the response (TTL: 1 hour)
   void redis.setex(cacheKey, 3600, JSON.stringify(responseBody))
