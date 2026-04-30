@@ -1,8 +1,6 @@
 {
   "crons": [
-    {
-      "path": "/api/cron/reset-budgets",
-      "schedule": "0 0 * * *"
-    }
+    { "path": "/api/cron/reset-budgets", "schedule": "0 0 * * *" },
+    { "path": "/api/cron/learning",      "schedule": "0 3 * * *" }
   ]
 }

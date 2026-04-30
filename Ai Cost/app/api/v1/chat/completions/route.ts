@@ -7,13 +7,15 @@ import { decrypt } from '@/lib/crypto'
 import { classify, ClassifierInput } from '@/lib/proxy/classify'
 import { autopilot } from '@/lib/proxy/autopilot'
 import { decide, ReasonCode } from '@/lib/proxy/decide'
+import { decideV2, runShadowDecision } from '@/lib/proxy/decideV2'
 import { computeCost, estimateTokens, PRICING } from '@/lib/proxy/cost'
 import { generateWHY } from '@/lib/proxy/why'
+import { computeQualitySignal, detectRetry } from '@/lib/proxy/feedback'
+import { updateUserContext } from '@/lib/proxy/context'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
-const LITELLM_BASE = process.env.LITELLM_BASE_URL!
 const MODEL_MAP = {
   'vela-mini': 'gpt-4o-mini',
   'vela-pro':  'gpt-4o',
@@ -23,6 +25,7 @@ type RealModel = keyof typeof PRICING
 
 export async function POST(req: NextRequest) {
   const requestId = crypto.randomUUID()
+  const reqStartMs = Date.now()
 
   // ── 1. AUTH ─────────────────────────────────────────────────────────
   const authResult = await validateApiKey(req.headers.get('Authorization'))
@@ -41,7 +44,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 2. RATE LIMIT ────────────────────────────────────────────────────
-  const { success: ratePassed } = await ratelimit.limit(userId!)
+  const { success: ratePassed } = await ratelimit.limit(userId)
   if (!ratePassed) {
     return NextResponse.json(
       { error: { message: 'Rate limit exceeded', type: 'rate_limit_error', code: 429 } },
@@ -95,7 +98,6 @@ export async function POST(req: NextRequest) {
     const raw = await redis.hget<number>(`budget:${userId}:today`, 'spentMicro')
     redisSpent = raw ?? budgetState.spentTodayMicro
   } catch {
-    // Redis failure → fail open, log and continue
     console.error('[vela] Redis read failed — failing open for budget check')
     redisSpent = budgetState.spentTodayMicro
   }
@@ -108,9 +110,9 @@ export async function POST(req: NextRequest) {
   if (apAction.action === 'REJECT') {
     const budgetPct = 100
     const costResult = computeCost('gpt-4o-mini', 0, 0)
-    const why = generateWHY('BUDGET_EXHAUSTED', { 
-      model: 'none', 
-      ...costResult, 
+    const why = generateWHY('BUDGET_EXHAUSTED', {
+      model: 'none',
+      ...costResult,
       budgetPct,
       spentTodayMicro: redisSpent,
       dailyLimitMicro: budgetState.dailyLimitMicro
@@ -124,7 +126,24 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── 6. EXACT MATCH CACHE ─────────────────────────────────────────────
+  // ── 6. IDEMPOTENCY WINDOW (5s) ───────────────────────────────────────
+  // Phase 0 fix: deduplicates identical requests within 5 seconds.
+  const bodyHash = createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 16)
+  const idemKey = `idem:${userId}:${bodyHash}`
+  try {
+    const idemResult = await redis.set(idemKey, requestId, { nx: true, ex: 5 })
+    if (idemResult === null) {
+      // Key already existed — this is a duplicate request within 5s
+      return NextResponse.json(
+        { error: { message: 'Duplicate request — identical request received within 5 seconds', type: 'idempotency_error', code: 429 } },
+        { status: 429 }
+      )
+    }
+  } catch {
+    // Fail open: idempotency is a nicety, not a hard gate
+  }
+
+  // ── 7. EXACT MATCH CACHE ─────────────────────────────────────────────
   const cacheKey = `cache:${createHash('sha256')
     .update(JSON.stringify(messages))
     .digest('hex')}`
@@ -137,30 +156,54 @@ export async function POST(req: NextRequest) {
       const costResult = computeCost('gpt-4o', inputTokens, cachedBody.usage?.completion_tokens ?? 0)
       const why = generateWHY('CACHE_HIT', { model: 'cached', ...costResult })
 
-      void writeLog({ userId: userId!, requestId, model: 'gpt-4o-mini', reasonCode: 'CACHE_HIT',
-        inputTokens, outputTokens: cachedBody.usage?.completion_tokens ?? 0, costResult,
-        isCacheHit: true, promptPreview: getPromptPreview(messages) })
+      void writeLog({
+        userId, requestId, model: 'gpt-4o-mini', reasonCode: 'CACHE_HIT',
+        inputTokens, outputTokens: cachedBody.usage?.completion_tokens ?? 0,
+        costResult, isCacheHit: true, promptPreview: getPromptPreview(messages),
+        finishReason: 'cache', latencyMs: Date.now() - reqStartMs,
+        cacheKeyPrefix: cacheKey.slice(6, 26),
+      })
 
       return NextResponse.json({
         ...cachedBody,
         id: `chatcmpl-${requestId}`,
-        vela: { requestId, reasonCode: 'CACHE_HIT', model: 'gpt-4o-mini (cached)',
+        vela: {
+          requestId, reasonCode: 'CACHE_HIT', model: 'gpt-4o-mini (cached)',
           actualCostMicro: 0, baselineCostMicro: costResult.baselineCostMicro,
-          savingsMicro: costResult.baselineCostMicro, savingsPct: 100, why },
+          savingsMicro: costResult.baselineCostMicro, savingsPct: 100, why,
+        },
       })
     }
   } catch { /* cache miss is fine */ }
 
-  // ── 7. CLASSIFY + DECIDE ─────────────────────────────────────────────
+  // ── 8. CLASSIFY + DECIDE (V1 — executes production routing) ──────────
   const inputText = messages.map((m: any) => m.content ?? '').join('\n')
   const inputTokens = estimateTokens(inputText)
   const classifierInput: ClassifierInput = { messages, totalInputTokens: inputTokens }
   const complexity = classify(classifierInput)
   const routing = decide(complexity, apAction)
+
+  // BUG FIX: use realModel from routing decision — not hardcoded 'gpt-4o-mini'
   const realModel = MODEL_MAP[routing.model] as RealModel
+
   const budgetPct = Math.round((redisSpent / budgetState.dailyLimitMicro) * 100)
 
-  // ── 8. EXECUTE via OpenAI directly (MVP MODE) ────────────────────────
+  // Phase 1: Run V2 in shadow mode (logs divergence, never affects routing)
+  void (async () => {
+    try {
+      const v2Decision = await decideV2(
+        { messages, totalInputTokens: inputTokens },
+        apAction,
+        true // shadowOnly = true
+      )
+      await runShadowDecision(prisma, requestId, userId, routing, v2Decision)
+    } catch {
+      // Shadow errors are always swallowed
+    }
+  })()
+
+  // ── 9. EXECUTE via OpenAI ─────────────────────────────────────────────
+  // Uses realModel (from routing decision) — Bug 1 fixed.
   let openAiRes: Response
   try {
     openAiRes = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -170,7 +213,7 @@ export async function POST(req: NextRequest) {
         'Authorization': `Bearer ${openAiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini', // Force actual execution to gpt-4o-mini
+        model: realModel, // ← Fixed: was hardcoded 'gpt-4o-mini'
         messages,
         stream,
         ...rest,
@@ -193,45 +236,73 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── 9. STREAMING PATH ────────────────────────────────────────────────
+  // ── 10. STREAMING PATH ────────────────────────────────────────────────
   if (stream) {
     const encoder = new TextEncoder()
     let outputTokens = 0
+    let streamFinishReason: string | undefined
+    let usageChunkFound = false
 
     const transformed = new TransformStream({
       transform(chunk, controller) {
         const text = new TextDecoder().decode(chunk)
-        // Count approximate output tokens from SSE deltas
-        const deltaMatches = text.matchAll(/"content":"([^"]+)"/g)
-        for (const match of deltaMatches) {
-          outputTokens += estimateTokens(match[1])
+
+        // Bug 3 fix: try to parse the usage chunk from the final SSE delta.
+        // OpenAI sends `data: {"usage": {...}}` as a final chunk when stream_options.include_usage=true.
+        // Fall back to regex estimation if not found.
+        const lines = text.split('\n')
+        for (const line of lines) {
+          if (!line.startsWith('data: ') || line === 'data: [DONE]') continue
+          try {
+            const parsed = JSON.parse(line.slice(6))
+            // Capture finish_reason from any choice delta
+            const fr = parsed.choices?.[0]?.finish_reason
+            if (fr) streamFinishReason = fr
+            // Capture actual token counts from usage field (present when include_usage=true)
+            if (parsed.usage?.completion_tokens) {
+              outputTokens = parsed.usage.completion_tokens
+              usageChunkFound = true
+            }
+          } catch { /* malformed chunk — skip */ }
         }
+
+        // If no usage chunk, fall back to regex token estimation
+        if (!usageChunkFound) {
+          const deltaMatches = text.matchAll(/"content":"([^"\\]*(\\.[^"\\]*)*)"/g)
+          for (const match of deltaMatches) {
+            outputTokens += estimateTokens(match[1])
+          }
+        }
+
         controller.enqueue(chunk)
       },
       flush(controller) {
-        const costResult = computeCost('gpt-4o-mini', inputTokens, outputTokens)
-        const why = generateWHY(routing.reasonCode, { 
-          model: realModel, 
-          ...costResult, 
+        const costResult = computeCost(realModel, inputTokens, outputTokens)
+        const why = generateWHY(routing.reasonCode, {
+          model: realModel,
+          ...costResult,
           budgetPct,
           spentTodayMicro: redisSpent,
           dailyLimitMicro: budgetState.dailyLimitMicro
         })
 
-        // Inject vela metadata as a final SSE comment
         const metaChunk = `\n: vela ${JSON.stringify({
-          requestId, 
-          reasonCode: routing.reasonCode, 
+          requestId,
+          reasonCode: routing.reasonCode,
           model: realModel,
           actualProvider: 'openai',
-          actualModel: 'gpt-4o-mini',
           ...costResult, why,
         })}\n\n`
         controller.enqueue(encoder.encode(metaChunk))
 
-        void writeLog({ userId: userId!, requestId, model: realModel, reasonCode: routing.reasonCode,
+        void writeLog({
+          userId, requestId, model: realModel, reasonCode: routing.reasonCode,
           inputTokens, outputTokens, costResult, isCacheHit: false,
-          promptPreview: getPromptPreview(messages) })
+          promptPreview: getPromptPreview(messages),
+          finishReason: streamFinishReason,
+          latencyMs: Date.now() - reqStartMs,
+          cacheKeyPrefix: cacheKey.slice(6, 26),
+        })
       },
     })
 
@@ -247,15 +318,17 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  // ── 10. NON-STREAMING PATH ───────────────────────────────────────────
+  // ── 11. NON-STREAMING PATH ────────────────────────────────────────────
   const responseBody = await openAiRes.json()
   const outputTokens = responseBody.usage?.completion_tokens ?? estimateTokens(
     responseBody.choices?.[0]?.message?.content ?? ''
   )
-  const costResult = computeCost('gpt-4o-mini', inputTokens, outputTokens)
-  const why = generateWHY(routing.reasonCode, { 
-    model: realModel, 
-    ...costResult, 
+  const finishReason: string | undefined = responseBody.choices?.[0]?.finish_reason
+  const latencyMs = Date.now() - reqStartMs
+  const costResult = computeCost(realModel, inputTokens, outputTokens)
+  const why = generateWHY(routing.reasonCode, {
+    model: realModel,
+    ...costResult,
     budgetPct,
     spentTodayMicro: redisSpent,
     dailyLimitMicro: budgetState.dailyLimitMicro
@@ -264,9 +337,14 @@ export async function POST(req: NextRequest) {
   // Cache the response (TTL: 1 hour)
   void redis.setex(cacheKey, 3600, JSON.stringify(responseBody))
 
-  void writeLog({ userId: userId!, requestId, model: realModel, reasonCode: routing.reasonCode,
+  void writeLog({
+    userId, requestId, model: realModel, reasonCode: routing.reasonCode,
     inputTokens, outputTokens, costResult, isCacheHit: false,
-    promptPreview: getPromptPreview(messages) })
+    promptPreview: getPromptPreview(messages),
+    finishReason,
+    latencyMs,
+    cacheKeyPrefix: cacheKey.slice(6, 26),
+  })
 
   return NextResponse.json(
     {
@@ -276,7 +354,6 @@ export async function POST(req: NextRequest) {
         reasonCode: routing.reasonCode,
         model: realModel,
         actualProvider: 'openai',
-        actualModel: 'gpt-4o-mini',
         actualCostMicro:   costResult.actualCostMicro,
         baselineCostMicro: costResult.baselineCostMicro,
         savingsMicro:      costResult.savingsMicro,
@@ -303,7 +380,7 @@ function getPromptPreview(messages: any[]): string {
   return (last?.content ?? '').slice(0, 100)
 }
 
-async function writeLog(params: {
+interface WriteLogParams {
   userId: string
   requestId: string
   model: string
@@ -313,12 +390,21 @@ async function writeLog(params: {
   costResult: ReturnType<typeof computeCost>
   isCacheHit: boolean
   promptPreview: string
-}) {
-  const { userId, requestId, model, reasonCode, inputTokens, outputTokens,
-    costResult, isCacheHit, promptPreview } = params
+  // Phase 1 additions (optional — backward compatible with all existing callers)
+  finishReason?: string
+  latencyMs?: number
+  cacheKeyPrefix?: string
+}
 
+async function writeLog(params: WriteLogParams) {
+  const {
+    userId, requestId, model, reasonCode, inputTokens, outputTokens,
+    costResult, isCacheHit, promptPreview,
+    finishReason, latencyMs, cacheKeyPrefix,
+  } = params
+
+  // ── Redis budget update (atomic pipeline) ──────────────────────────
   try {
-    // Atomic Redis budget update
     const pipeline = redis.pipeline()
     pipeline.hincrby(`budget:${userId}:today`, 'spentMicro',    costResult.actualCostMicro)
     pipeline.hincrby(`budget:${userId}:today`, 'baselineMicro', costResult.baselineCostMicro)
@@ -330,8 +416,25 @@ async function writeLog(params: {
     console.error('[vela] Redis write failed:', err)
   }
 
+  // ── Phase 1: Retry detection ───────────────────────────────────────
+  let isRetry = false
+  if (cacheKeyPrefix && !isCacheHit) {
+    isRetry = await detectRetry(redis, userId, cacheKeyPrefix)
+  }
+
+  // ── Phase 1: Quality signal ────────────────────────────────────────
+  const qualitySignal = computeQualitySignal(finishReason, inputTokens, outputTokens)
+
+  // ── Phase 1: User context update (async, fire-and-forget) ──────────
+  void updateUserContext(redis, userId, {
+    complexity: reasonCode === 'COMPLEXITY_HIGH' ? 1 : 0,
+    model,
+    savingsMicro: costResult.savingsMicro,
+    qualitySignal: qualitySignal.signal,
+  })
+
+  // ── Postgres writes ────────────────────────────────────────────────
   try {
-    // Postgres write — fire and forget
     await Promise.all([
       prisma.decisionLog.create({
         data: {
@@ -342,6 +445,11 @@ async function writeLog(params: {
           savingsMicro:      costResult.savingsMicro,
           savingsPct:        costResult.savingsPct,
           isCacheHit, promptPreview,
+          // Phase 1 fields (nullable):
+          finishReason:  finishReason ?? null,
+          latencyMs:     latencyMs    ?? null,
+          qualitySignal: qualitySignal.signal,
+          isRetry,
         },
       }),
       prisma.budgetState.update({

@@ -3,9 +3,14 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./vela.db"
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
+
+// ─────────────────────────────────────────────────────────────
+// Core models (shape preserved — zero breaking changes)
+// ─────────────────────────────────────────────────────────────
 
 model User {
   id              String        @id @default(uuid())
@@ -17,6 +22,7 @@ model User {
   apiKeys         ApiKey[]
   budgetState     BudgetState?
   decisionLogs    DecisionLog[]
+  shadowDecisions ShadowDecision[]
 }
 
 model ApiKey {
@@ -68,7 +74,54 @@ model DecisionLog {
   promptPreview     String?  // first 100 chars (truncated)
   createdAt         DateTime @default(now())
 
+  // ── Phase 1 additions (nullable — backward compatible) ──
+  finishReason      String?           // "stop" | "length" | "content_filter"
+  latencyMs         Int?              // wall-clock ms from request to first byte
+  qualitySignal     String?           // "positive" | "neutral" | "negative"
+  isRetry           Boolean           @default(false)
+
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt(sort: Desc)])
+  @@index([qualitySignal])
+  @@index([isRetry])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Phase 1: Learning engine output table
+// ─────────────────────────────────────────────────────────────
+
+model RoutingConfidence {
+  id              String   @id @default(uuid())
+  complexityScore Int      // 0 (simple) or 1 (complex) in V1; 1-5 in V2
+  model           String   // "gpt-4o-mini" | "gpt-4o"
+  successRate     Float    // 0.0-1.0
+  sampleCount     Int
+  avgLatencyMs    Int
+  avgSavingsMicro Int
+  computedAt      DateTime @default(now())
+
+  @@unique([complexityScore, model])
+  @@index([complexityScore])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Phase 2: Shadow decision log for V2 engine accuracy tracking
+// ─────────────────────────────────────────────────────────────
+
+model ShadowDecision {
+  id            String   @id @default(uuid())
+  requestId     String   // matches DecisionLog.requestId
+  userId        String
+  v1Model       String   // what V1 chose: "vela-mini" | "vela-pro"
+  v2Model       String   // what V2 would have chosen
+  diverged      Boolean  // v1Model != v2Model
+  complexityV1  Int      // 0 or 1
+  complexityV2  Int      // 1-5
+  createdAt     DateTime @default(now())
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([diverged])
 }
