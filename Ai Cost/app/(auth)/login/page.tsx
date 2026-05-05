@@ -19,18 +19,57 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
 
-    const supabase = createBrowserSupabase()
-    const { error: authError } =
-      mode === 'login'
-        ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password })
-
-    if (authError) {
-      setError(authError.message)
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      setError('Please enter a valid email address.')
       setLoading(false)
-    } else {
-      // New signups go to settings first — forces BYOK configuration
+      return
+    }
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters.')
+      setLoading(false)
+      return
+    }
+
+    if (mode === 'signup') {
+      const limitRes = await fetch('/api/auth/check-limit')
+      if (limitRes.ok) {
+        const limitData = await limitRes.json()
+        if (limitData.allowed === false) {
+          setError('We are currently at capacity for the MVP (20/20 users). Please join the waitlist.')
+          setLoading(false)
+          return
+        }
+      }
+    }
+
+    // Custom local auth
+    const endpoint = mode === 'login' ? '/api/auth/login' : '/api/auth/signup'
+    
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        if (data.error?.includes('already registered')) {
+          setError('This email is already registered. Please sign in.')
+        } else {
+          setError(data.error || 'Authentication failed')
+        }
+        setLoading(false)
+        return
+      }
+
       router.push(mode === 'signup' ? '/settings' : '/dashboard')
+    } catch (err: any) {
+      setError(err.message || 'Something went wrong')
+      setLoading(false)
     }
   }
 
@@ -50,7 +89,7 @@ export default function LoginPage() {
           <span className="text-2xl font-bold tracking-tight text-foreground">Vela</span>
         </div>
 
-        <div className="bg-card border border-border rounded-2xl p-8 shadow-xl shadow-black/20">
+        <div className="glass-card p-8 relative">
           <h1 className="text-xl font-bold text-foreground mb-1">
             {mode === 'login' ? 'Welcome back' : 'Create account'}
           </h1>
@@ -107,6 +146,10 @@ export default function LoginPage() {
               </span>
             </button>
           </div>
+          
+          <p className="text-center text-xs text-muted-foreground mt-6 opacity-80 border-t border-border/50 pt-4">
+            Supports OpenAI and Claude API keys
+          </p>
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-6 opacity-50">

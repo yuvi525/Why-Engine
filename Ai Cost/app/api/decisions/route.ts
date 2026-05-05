@@ -24,20 +24,62 @@ export async function GET(req: NextRequest) {
       id: true, requestId: true, model: true, reasonCode: true,
       inputTokens: true, outputTokens: true, actualCostMicro: true,
       baselineCostMicro: true, savingsMicro: true, savingsPct: true,
-      isCacheHit: true, promptPreview: true, createdAt: true,
+      isCacheHit: true, promptPreview: true, createdAt: true, latencyMs: true,
     },
   })
 
-  // Also fetch today's stats
+  // Also fetch today's and this month's stats
   const today = new Date(); today.setHours(0, 0, 0, 0)
-  const [budget, todayStats] = await Promise.all([
+  const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  const [budget, todayStats, monthStats, allDates] = await Promise.all([
     prisma.budgetState.findUnique({ where: { userId: user.id } }),
     prisma.decisionLog.aggregate({
       where: { userId: user.id, createdAt: { gte: today } },
       _sum: { savingsMicro: true, actualCostMicro: true, baselineCostMicro: true },
       _count: { id: true },
     }),
+    prisma.decisionLog.aggregate({
+      where: { userId: user.id, createdAt: { gte: firstDayOfMonth } },
+      _sum: { savingsMicro: true },
+    }),
+    prisma.decisionLog.findMany({
+      where: { userId: user.id },
+      select: { createdAt: true },
+      orderBy: { createdAt: 'desc' }
+    })
   ])
+
+  // Calculate Streak
+  let streak = 0;
+  let currentDate = new Date();
+  currentDate.setHours(0,0,0,0);
+  const daysWithRequests = new Set(allDates.map(l => {
+    const d = new Date(l.createdAt);
+    d.setHours(0,0,0,0);
+    return d.getTime();
+  }));
+
+  let checkDate = new Date(currentDate);
+  if (daysWithRequests.has(checkDate.getTime())) {
+    streak++;
+    checkDate.setDate(checkDate.getDate() - 1);
+    while (daysWithRequests.has(checkDate.getTime())) {
+      streak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+  } else {
+    // Check if streak ended yesterday
+    checkDate.setDate(checkDate.getDate() - 1);
+    if (daysWithRequests.has(checkDate.getTime())) {
+      streak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+      while (daysWithRequests.has(checkDate.getTime())) {
+        streak++;
+        checkDate.setDate(checkDate.getDate() - 1);
+      }
+    }
+  }
 
   const responsePayload = {
     logs: logs.map(log => ({
@@ -57,12 +99,15 @@ export async function GET(req: NextRequest) {
     })),
     stats: {
       savingsTodayMicro:  todayStats._sum.savingsMicro      ?? 0,
+      savingsThisMonthMicro: monthStats._sum.savingsMicro   ?? 0,
       spentTodayMicro:    todayStats._sum.actualCostMicro   ?? 0,
       baselineTodayMicro: todayStats._sum.baselineCostMicro ?? 0,
       requestsToday:      todayStats._count.id              ?? 0,
+      streakDays:         streak,
       savingsTotalMicro:  budget?.totalBaselineMicro != null
         ? budget.totalBaselineMicro - budget.totalSpentMicro
         : 0,
+      totalCostMicro:    budget?.totalSpentMicro    ?? 0,
       dailyLimitMicro:   budget?.dailyLimitMicro    ?? 5_000_000,
       spentBudgetMicro:  budget?.spentTodayMicro    ?? 0,
     },

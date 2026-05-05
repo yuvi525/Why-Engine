@@ -40,7 +40,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     fetch('/api/settings')
-      .then(r => r.ok ? r.json() : null)
+      .then(r => {
+        if (r.status === 401) {
+          router.push('/login')
+          return null
+        }
+        return r.ok ? r.json() : null
+      })
       .then(d => {
         if (!d) return
         const limit    = d.planConfig?.requestsPerDay ?? 50
@@ -57,9 +63,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [])
 
   const handleSignOut = async () => {
-    const supabase = createBrowserSupabase()
-    await supabase.auth.signOut()
-    router.push('/login')
+    await fetch('/api/auth/logout', { method: 'POST' })
+    router.push('/')
   }
 
   return (
@@ -150,7 +155,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           ) : (
             <div className="bg-primary/5 border border-primary/10 rounded-xl px-3 py-2.5">
               <p className="text-[10px] font-semibold text-primary uppercase tracking-widest">Autopilot Active</p>
-              <p className="text-xs text-muted-foreground mt-0.5">All requests optimized</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Optimized model selection</p>
             </div>
           )}
 

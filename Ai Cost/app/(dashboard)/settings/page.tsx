@@ -42,9 +42,10 @@ function Toggle({
 }
 
 const PLAN_COLORS: Record<string, string> = {
-  free:  'bg-secondary text-muted-foreground border border-border',
-  pro:   'bg-blue-900/30 text-blue-400 border border-blue-900/50',
-  scale: 'bg-amber-900/30 text-amber-400 border border-amber-900/50',
+  free:      'bg-secondary text-muted-foreground border border-border',
+  pro:       'bg-blue-900/30 text-blue-400 border border-blue-900/50',
+  pro_trial: 'bg-purple-900/30 text-purple-400 border border-purple-900/50',
+  scale:     'bg-amber-900/30 text-amber-400 border border-amber-900/50',
 }
 
 // ── Main Component ────────────────────────────────────────────────────
@@ -82,13 +83,17 @@ export default function SettingsPage() {
 
   const fetchSettings = () =>
     fetch('/api/settings')
-      .then(r => r.json())
-      .then(d => {
+      .then(async r => {
+        if (!r.ok) return // fail silently — keep current state
+        const d = await r.json().catch(() => null)
+        if (!d) return
         setSettings(d)
         setV2Routing(d.v2RoutingEnabled ?? false)
         setV2Why(d.v2WhyEnabled ?? false)
-        // Show upgrade banner if on free and made >30 requests today
-        if (d.plan === 'free' && (d.requestsToday ?? 0) > 30) {
+        // Show upgrade banner only for free customers who are active users
+        const ownerEmail = 'yuvrajsingh2351@gmail.com'
+        const isOwnerUser = d.email === ownerEmail || d.role === 'owner'
+        if (!isOwnerUser && d.plan === 'free' && (d.requestsToday ?? 0) > 30) {
           setShowUpgradeBanner(true)
         }
       })
@@ -104,13 +109,17 @@ export default function SettingsPage() {
   const createKey = async () => {
     setKeysLoading(true)
     setNewKey(null)
-    const res  = await fetch('/api/keys', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label: 'Production Key' }),
-    })
-    const data = await res.json()
-    if (data.key) { setNewKey(data.key); fetchKeys() }
-    setKeysLoading(false)
+    try {
+      const res  = await fetch('/api/keys', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: 'Vela API Key' }),
+      })
+      if (!res.ok) return
+      const data = await res.json().catch(() => null)
+      if (data?.key) { setNewKey(data.key); fetchKeys() }
+    } catch { /* non-critical */ } finally {
+      setKeysLoading(false)
+    }
   }
 
   const revokeKey = async (id: string) => {
@@ -145,7 +154,7 @@ export default function SettingsPage() {
   }
 
   const removeByok = async () => {
-    if (!confirm('Remove your OpenAI API key? Requests will stop working until you add a new one.')) return
+    if (!confirm('Remove your Provider API key? Requests will stop working until you add a new one.')) return
     await fetch('/api/settings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ removeOpenAiKey: true }),
@@ -167,12 +176,13 @@ export default function SettingsPage() {
 
   // ── Derived ─────────────────────────────────────────────────────────
 
+  const isOwner    = settings?.role === 'owner' || settings?.email === 'yuvrajsingh2351@gmail.com'
   const plan       = settings?.plan ?? 'free'
   const planConfig = settings?.planConfig
   const requestsToday = settings?.requestsToday ?? 0
   const dailyLimit = planConfig?.requestsPerDay ?? 50
   const usagePct   = dailyLimit === -1 ? 0 : Math.min(Math.round((requestsToday / dailyLimit) * 100), 100)
-  const nearLimit  = usagePct >= 80
+  const nearLimit  = !isOwner && usagePct >= 80
 
   // ── Render ───────────────────────────────────────────────────────────
 
@@ -188,9 +198,9 @@ export default function SettingsPage() {
         <p className="text-muted-foreground text-sm mt-1">Manage your API keys, OpenAI key, plan, and advanced features.</p>
       </motion.div>
 
-      {/* ── UPGRADE BANNER ───────────────────────────────────────────── */}
+      {/* ── UPGRADE BANNER — hidden for owner ─────────────────────────── */}
       <AnimatePresence>
-        {showUpgradeBanner && plan === 'free' && (
+        {showUpgradeBanner && !isOwner && plan === 'free' && (
           <motion.div
             initial={{ opacity: 0, y: -8, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -247,7 +257,7 @@ export default function SettingsPage() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-card border border-border rounded-2xl overflow-hidden"
+        className="glass-card overflow-hidden"
       >
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/20">
           <div className="flex items-center gap-2">
@@ -311,13 +321,13 @@ export default function SettingsPage() {
                 </div>
               )}
 
-              {plan !== 'scale' && (
+              {!isOwner && plan !== 'scale' && (
                 <a
-                  href="mailto:upgrade@getvela.ai?subject=Upgrade%20Vela%20Plan"
+                  href="/pricing"
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:text-primary/80 transition"
                 >
                   <Zap className="w-3.5 h-3.5" />
-                  {plan === 'free' ? 'Upgrade to Pro — $29/mo →' : 'Upgrade to Scale — $99/mo →'}
+                  {plan === 'free' || plan === 'pro_trial' ? 'Upgrade to Pro — ₹2,499/mo →' : 'Upgrade to Scale — ₹9,999/mo →'}
                 </a>
               )}
             </>
@@ -330,11 +340,11 @@ export default function SettingsPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.05 }}
-        className="bg-card border border-border rounded-2xl overflow-hidden"
+        className="glass-card overflow-hidden"
       >
         <div className="px-6 py-4 border-b border-border flex items-center gap-2 bg-secondary/20">
           <Shield className="w-4 h-4 text-muted-foreground" />
-          <h2 className="font-semibold text-foreground text-sm">OpenAI API Key (BYOK)</h2>
+          <h2 className="font-semibold text-foreground text-sm">Provider API Key (BYOK)</h2>
           <span className="text-[10px] font-semibold bg-primary/10 text-primary px-2 py-0.5 rounded-full uppercase tracking-wider ml-auto">
             {settings?.hasApiKey ? 'Configured' : 'Required'}
           </span>
@@ -342,7 +352,7 @@ export default function SettingsPage() {
 
         <div className="px-6 py-5 space-y-4">
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Vela uses your OpenAI key to make API calls on your behalf. Your key is encrypted with AES-256-GCM and never stored in plaintext.
+            Vela uses your provider key to make API calls on your behalf. Supports OpenAI (sk-...) and Claude (sk-ant-...).
           </p>
 
           {/* Current key display */}
@@ -350,7 +360,14 @@ export default function SettingsPage() {
             <div className="flex items-center gap-3 bg-secondary/40 border border-border/50 rounded-xl px-4 py-3">
               <ShieldCheck className="w-4 h-4 text-primary flex-shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Current Key</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5 flex items-center gap-2">
+                  Current Key
+                  {settings.provider && (
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${settings.provider === 'claude' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30 glow-blue' : 'bg-primary/20 text-primary border border-primary/30 glow-green'}`}>
+                      Detected Provider: {settings.provider === 'claude' ? 'Claude' : 'OpenAI'}
+                    </span>
+                  )}
+                </p>
                 <code className="text-xs font-mono text-foreground">{settings.keyMask}</code>
               </div>
               <button
@@ -429,7 +446,7 @@ export default function SettingsPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
-        className="bg-card border border-border rounded-2xl overflow-hidden"
+        className="glass-card overflow-hidden"
       >
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/20">
           <div className="flex items-center gap-2">
@@ -445,6 +462,12 @@ export default function SettingsPage() {
             <Plus className="w-3.5 h-3.5" />
             {keysLoading ? 'Generating...' : 'New Key'}
           </button>
+        </div>
+
+        <div className="px-6 py-3 border-b border-border bg-secondary/5">
+          <p className="text-xs text-muted-foreground">
+            This key is used to send requests through Vela proxy. Not your OpenAI key.
+          </p>
         </div>
 
         {/* Proxy endpoint */}
@@ -497,7 +520,7 @@ export default function SettingsPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.15 }}
-        className="bg-card border border-border rounded-2xl p-6"
+        className="glass-card p-6"
       >
         <h2 className="font-semibold text-foreground text-sm mb-4">Quick Integration</h2>
         <div className="bg-secondary rounded-xl p-4 overflow-x-auto">
@@ -522,12 +545,14 @@ const response = await client.chat.completions.create({
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2 }}
-        className="bg-card border border-border rounded-2xl overflow-hidden"
+        className="glass-card overflow-hidden"
       >
         <div className="px-6 py-4 border-b border-border flex items-center gap-2 bg-secondary/20">
           <FlaskConical className="w-4 h-4 text-muted-foreground" />
           <h2 className="font-semibold text-foreground text-sm">V2 Features</h2>
-          <span className="text-[10px] font-semibold bg-amber-900/30 text-amber-400 px-2 py-0.5 rounded-full uppercase tracking-wider">Beta</span>
+          {settings?.role !== 'owner' && (
+            <span className="text-[10px] font-semibold bg-amber-900/30 text-amber-400 px-2 py-0.5 rounded-full uppercase tracking-wider">Beta</span>
+          )}
         </div>
 
         <div className="divide-y divide-border/50">

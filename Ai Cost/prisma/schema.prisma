@@ -3,9 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider  = "sqlite"
+  url       = "file:./vela.db"
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -15,8 +14,11 @@ datasource db {
 model User {
   id              String        @id @default(uuid())
   email           String        @unique
+  passwordHash    String?       // bcrypt hashed password
   encryptedApiKey String?       // AES-256-GCM encrypted OpenAI key
-  plan            String        @default("free")  // "free" | "pro" | "scale"
+  plan            String        @default("free")  // "free" | "pro" | "scale" | "pro_trial"
+  role            String        @default("customer") // "customer" | "owner"
+  trialEndsAt     DateTime?     // when the pro_trial expires
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 

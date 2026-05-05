@@ -7,7 +7,29 @@ import { Key, DollarSign, Code, Check } from 'lucide-react'
 export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(false)
+  const [providerKey, setProviderKey] = useState('')
+  const [provider, setProvider] = useState<'openai' | 'claude'>('openai')
+  const [error, setError] = useState('')
   const [apiKey, setApiKey] = useState('')
+
+  const handleSaveProviderKey = async () => {
+    if (!providerKey.startsWith('sk-') || providerKey.length < 20) {
+      setError('Invalid key format. Must start with sk-')
+      return
+    }
+    setLoading(true)
+    setError('')
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      body: JSON.stringify({ openAiKey: providerKey })
+    })
+    if (res.ok) {
+      setStep(3)
+    } else {
+      setError('Failed to save key')
+    }
+    setLoading(false)
+  }
 
   const handleCreateKey = async () => {
     setLoading(true)
@@ -15,14 +37,14 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
     const data = await res.json()
     if (data.key) {
       setApiKey(data.key)
-      setStep(2)
+      setStep(4)
     }
     setLoading(false)
   }
 
   return (
-    <div className="max-w-2xl mx-auto mt-12 bg-card border border-border shadow-sm rounded-2xl overflow-hidden">
-      <div className="p-8 border-b border-border bg-secondary/30">
+    <div className="max-w-2xl mx-auto mt-12 glass-card rounded-2xl overflow-hidden">
+      <div className="p-8 border-b border-border bg-secondary/10">
         <h2 className="text-2xl font-bold tracking-tight text-foreground">Welcome to Vela Autopilot</h2>
         <p className="text-muted-foreground mt-2">Let's set up your AI routing proxy in 3 simple steps.</p>
       </div>
@@ -40,7 +62,53 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
               <div className="flex items-center space-x-4">
                 <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">1</div>
                 <div>
-                  <h3 className="text-lg font-semibold text-foreground">Generate API Key</h3>
+                  <h3 className="text-lg font-semibold text-foreground">Add your API key to start saving</h3>
+                  <p className="text-sm text-muted-foreground">Select your provider below.</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                 <button onClick={() => { setProvider('openai'); setStep(2) }} className="p-4 border border-border rounded-xl hover:border-primary transition flex flex-col items-center gap-2">
+                   <span className="font-semibold">OpenAI</span>
+                 </button>
+                 <button onClick={() => { setProvider('claude'); setStep(2) }} className="p-4 border border-border rounded-xl hover:border-primary transition flex flex-col items-center gap-2">
+                   <span className="font-semibold">Claude</span>
+                 </button>
+              </div>
+            </motion.div>
+          )}
+
+          {step === 2 && (
+             <motion.div key="step2" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="space-y-6">
+                <div className="flex items-center space-x-4">
+                   <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">2</div>
+                   <div>
+                     <h3 className="text-lg font-semibold text-foreground">Enter {provider === 'openai' ? 'OpenAI' : 'Claude'} API Key</h3>
+                     <p className="text-sm text-muted-foreground">Securely connect your account.</p>
+                   </div>
+                </div>
+                <div>
+                   <input type="password" value={providerKey} onChange={(e) => setProviderKey(e.target.value)} className="w-full bg-secondary border border-border rounded-xl p-3 text-foreground" placeholder="sk-..." />
+                   <p className="text-xs text-muted-foreground mt-2 font-medium">Your key is never stored in plain text</p>
+                   {error && <p className="text-xs text-destructive mt-1">{error}</p>}
+                </div>
+                <button onClick={handleSaveProviderKey} disabled={loading} className="w-full py-3 bg-foreground text-background rounded-lg font-medium transition disabled:opacity-50">
+                  {loading ? 'Saving...' : 'Save Key'}
+                </button>
+             </motion.div>
+          )}
+
+          {step === 3 && (
+            <motion.div
+              key="step3"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="space-y-6"
+            >
+              <div className="flex items-center space-x-4">
+                <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">3</div>
+                <div>
+                  <h3 className="text-lg font-semibold text-foreground">Generate Proxy Key</h3>
                   <p className="text-sm text-muted-foreground">This key authenticates your app with the Vela proxy.</p>
                 </div>
               </div>
@@ -55,7 +123,7 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
             </motion.div>
           )}
 
-          {step === 2 && (
+          {step === 4 && (
             <motion.div
               key="step2"
               initial={{ opacity: 0, x: 20 }}
@@ -64,7 +132,7 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
               className="space-y-6"
             >
               <div className="flex items-center space-x-4">
-                <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">2</div>
+                <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">4</div>
                 <div>
                   <h3 className="text-lg font-semibold text-foreground">Secure your Key</h3>
                   <p className="text-sm text-muted-foreground">Copy this key now. It won't be shown again.</p>
@@ -76,7 +144,7 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
               </div>
 
               <button
-                onClick={() => setStep(3)}
+                onClick={() => setStep(5)}
                 className="w-full py-3 px-4 bg-foreground hover:bg-foreground/90 text-background rounded-lg font-medium transition"
               >
                 I've copied my key
@@ -84,16 +152,16 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
             </motion.div>
           )}
 
-          {step === 3 && (
+          {step === 5 && (
             <motion.div
-              key="step3"
+              key="step5"
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
               className="space-y-6"
             >
               <div className="flex items-center space-x-4">
-                <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">3</div>
+                <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">5</div>
                 <div>
                   <h3 className="text-lg font-semibold text-foreground">Integrate Proxy</h3>
                   <p className="text-sm text-muted-foreground">Update your OpenAI client base URL.</p>

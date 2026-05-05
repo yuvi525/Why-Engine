@@ -13,14 +13,21 @@ import { generateWHY } from '@/lib/proxy/why'
 import { generateWHY_v2 } from '@/lib/proxy/why-v2'
 import { computeQualitySignal, detectRetry } from '@/lib/proxy/feedback'
 import { updateUserContext, getUserContext } from '@/lib/proxy/context'
-import { PLAN_LIMITS, isOverRequestLimit, Plan } from '@/lib/plans'
+import { PLAN_LIMITS, isOverRequestLimit, Plan, resolvePlan } from '@/lib/plans'
+import { detectProvider } from '@/lib/providers/detect'
+import { callClaudeAdapter } from '@/lib/providers/claude'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
 
-const MODEL_MAP = {
+const MODEL_MAP_OPENAI = {
   'vela-mini': 'gpt-4o-mini',
   'vela-pro':  'gpt-4o',
+} as const
+
+const MODEL_MAP_CLAUDE = {
+  'vela-mini': 'claude-3-5-haiku-20241022',
+  'vela-pro':  'claude-3-5-sonnet-20241022',
 } as const
 
 type RealModel = keyof typeof PRICING
@@ -73,17 +80,28 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 4. LOAD USER STATE ───────────────────────────────────────────────
-  const [user, budgetState] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: userId },
-      select: { encryptedApiKey: true, plan: true },
-    }),
-    prisma.budgetState.upsert({
-      where: { userId },
-      update: {},
-      create: { userId },
-    }),
-  ])
+  let user, budgetState
+  try {
+    const dbResult = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { encryptedApiKey: true, plan: true, role: true, email: true, trialEndsAt: true },
+      }),
+      prisma.budgetState.upsert({
+        where: { userId },
+        update: {},
+        create: { userId },
+      }),
+    ])
+    user = dbResult[0]
+    budgetState = dbResult[1]
+  } catch (dbError) {
+    console.error('[vela] Database connection failed:', dbError)
+    return NextResponse.json(
+      { error: { message: 'Service unavailable: Database connection failed.', type: 'service_unavailable', code: 503 } },
+      { status: 503 }
+    )
+  }
 
   if (!user?.encryptedApiKey) {
     return NextResponse.json(
@@ -120,8 +138,9 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 4c. PLAN LIMIT ENFORCEMENT ────────────────────────────────────
-  const userPlan = (user.plan ?? 'free') as Plan
-  if (isOverRequestLimit(userPlan, budgetState.requestsToday)) {
+  const userPlan = resolvePlan(user)
+  const isOwner = userPlan === 'scale' // scale is returned for owner
+  if (!isOwner && isOverRequestLimit(userPlan, budgetState.requestsToday)) {
     const limit = PLAN_LIMITS[userPlan].requestsPerDay
     return NextResponse.json(
       {
@@ -139,6 +158,8 @@ export async function POST(req: NextRequest) {
   }
 
   const openAiKey = decrypt(user.encryptedApiKey)
+  const provider = detectProvider(openAiKey)
+  const providerModelMap = provider === 'claude' ? MODEL_MAP_CLAUDE : MODEL_MAP_OPENAI
 
   // ── 5. BUDGET GATE (synchronous) ─────────────────────────────────────
   let redisSpent = 0
@@ -150,12 +171,35 @@ export async function POST(req: NextRequest) {
     redisSpent = budgetState.spentTodayMicro
   }
 
+  // ── 5a. PLAN BUDGET CAP (hard ceiling per plan) ──────────────────────
+  // Free plan: max $5/day | Pro: $50/day | Scale: $500/day
+  // This enforces the plan limit regardless of the user's own dailyLimit setting.
+  if (!isOwner) {
+    const planCap = PLAN_LIMITS[userPlan]?.dailyBudgetCapUsd ?? 5
+    const planCapMicro = planCap * 1_000_000
+    if (redisSpent >= planCapMicro) {
+      return NextResponse.json(
+        {
+          error: {
+            message: `Daily budget cap reached for your ${PLAN_LIMITS[userPlan]?.name ?? userPlan} plan ($${planCap}/day). Upgrade to continue.`,
+            type: 'plan_budget_exceeded',
+            code: 429,
+            plan: userPlan,
+            budgetCapUsd: planCap,
+          },
+          vela: { requestId, reasonCode: 'PLAN_BUDGET_CAP' },
+        },
+        { status: 429 }
+      )
+    }
+  }
+
   const apAction = autopilot(
-    { spentTodayMicro: redisSpent, dailyLimitMicro: budgetState.dailyLimitMicro },
+    { spentTodayMicro: redisSpent, dailyLimitMicro: budgetState.dailyLimitMicro, requestsToday: budgetState.requestsToday },
     { autoDowngradeAt: budgetState.autoDowngradeAt }
   )
 
-  if (apAction.action === 'REJECT') {
+  if (!isOwner && apAction.action === 'REJECT') {
     const budgetPct = 100
     const costResult = computeCost('gpt-4o-mini', 0, 0)
     const why = generateWHY('BUDGET_EXHAUSTED', {
@@ -192,16 +236,24 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 7. EXACT MATCH CACHE ─────────────────────────────────────────────
-  const cacheKey = `cache:${createHash('sha256')
+  const promptHash = createHash('sha256')
     .update(JSON.stringify(messages))
-    .digest('hex')}`
+    .digest('hex')
+  const cacheKey = `cache:${userId}:${body.model || 'unknown'}:${promptHash}`
 
   try {
-    const cached = await redis.get<string>(cacheKey)
-    if (cached) {
-      const cachedBody = JSON.parse(cached)
-      const inputTokens = estimateTokens(messages.map((m: any) => m.content).join(' '))
-      const costResult = computeCost('gpt-4o', inputTokens, cachedBody.usage?.completion_tokens ?? 0)
+    const cachedRaw = await redis.get<any>(cacheKey)
+    console.log('[vela] Cache lookup:', { cacheKey, found: !!cachedRaw })
+    if (cachedRaw) {
+      const cachedBody = typeof cachedRaw === 'string' ? JSON.parse(cachedRaw) : cachedRaw
+      const inputTokens = cachedBody.usage?.prompt_tokens ?? estimateTokens(messages.map((m: any) => m.content).join(' '))
+      const rawCost = computeCost('gpt-4o', inputTokens, cachedBody.usage?.completion_tokens ?? 0)
+      const costResult = {
+        actualCostMicro: 0,
+        baselineCostMicro: rawCost.baselineCostMicro,
+        savingsMicro: rawCost.baselineCostMicro,
+        savingsPct: 100
+      }
       const why = generateWHY('CACHE_HIT', { model: 'cached', ...costResult })
 
       void writeLog({
@@ -209,7 +261,7 @@ export async function POST(req: NextRequest) {
         inputTokens, outputTokens: cachedBody.usage?.completion_tokens ?? 0,
         costResult, isCacheHit: true, promptPreview: getPromptPreview(messages),
         finishReason: 'cache', latencyMs: Date.now() - reqStartMs,
-        cacheKeyPrefix: cacheKey.slice(6, 26),
+        cacheKeyPrefix: promptHash.slice(0, 20),
       })
 
       return NextResponse.json({
@@ -218,11 +270,13 @@ export async function POST(req: NextRequest) {
         vela: {
           requestId, reasonCode: 'CACHE_HIT', model: 'gpt-4o-mini (cached)',
           actualCostMicro: 0, baselineCostMicro: costResult.baselineCostMicro,
-          savingsMicro: costResult.baselineCostMicro, savingsPct: 100, why,
+          savingsMicro: costResult.baselineCostMicro, savingsPct: 100,
+          cost: 0, baselineCost: costResult.baselineCostMicro / 1e6, savings: costResult.baselineCostMicro / 1e6,
+          why,
         },
       })
     }
-  } catch { /* cache miss is fine */ }
+  } catch (err) { console.error('[vela] Cache error:', err) }
 
   // ── 8. CLASSIFY + DECIDE ─────────────────────────────────────────────
   const inputText = messages.map((m: any) => m.content ?? '').join('\n')
@@ -247,10 +301,10 @@ export async function POST(req: NextRequest) {
   }
 
   // ── V1 routing (always runs as ground truth) ──────────────────────
-  const routing = decide(complexity, apAction)
+  const routing = decide(complexity, isOwner ? { action: 'PASS', reason: null } : apAction)
 
   // ── V2 routing: active mode if flag set, shadow mode otherwise ────
-  let realModel = MODEL_MAP[routing.model] as RealModel
+  let realModel = providerModelMap[routing.model] as RealModel
 
   if (useV2Routing) {
     // V2 is active for this user — use V2 decision directly
@@ -261,7 +315,7 @@ export async function POST(req: NextRequest) {
     ).catch(() => null)
 
     if (v2Decision) {
-      realModel = MODEL_MAP[v2Decision.model] as RealModel
+      realModel = providerModelMap[v2Decision.model] as RealModel
       // Still log shadow record so we can track V1 vs V2 divergence
       void runShadowDecision(prisma, requestId, userId, routing, v2Decision)
     }
@@ -281,34 +335,38 @@ export async function POST(req: NextRequest) {
     })()
   }
 
-  // ── 9. EXECUTE via OpenAI ─────────────────────────────────────────────
-  // Uses realModel (from routing decision) — Bug 1 fixed.
+  // ── 9. EXECUTE via OpenAI or Claude ─────────────────────────────────────────────
+  // Uses realModel (from routing decision)
   let openAiRes: Response
   try {
-    openAiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${openAiKey}`,
-      },
-      body: JSON.stringify({
-        model: realModel, // ← Fixed: was hardcoded 'gpt-4o-mini'
-        messages,
-        stream,
-        ...rest,
-      }),
-    })
+    if (provider === 'claude') {
+      openAiRes = await callClaudeAdapter(openAiKey, realModel, messages, stream, rest)
+    } else {
+      openAiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${openAiKey}`,
+        },
+        body: JSON.stringify({
+          model: realModel,
+          messages,
+          stream,
+          ...rest,
+        }),
+      })
+    }
   } catch (err) {
-    console.error('[vela] OpenAI fetch error:', err)
+    console.error('[vela] Provider fetch error:', err)
     return NextResponse.json(
-      { error: { message: 'OpenAI API unavailable', type: 'proxy_error', code: 502 } },
+      { error: { message: 'Provider API unavailable', type: 'proxy_error', code: 502 } },
       { status: 502 }
     )
   }
 
   if (!openAiRes.ok) {
     const errBody = await openAiRes.text()
-    console.error('[vela] OpenAI error:', openAiRes.status, errBody)
+    console.error('[vela] Provider error:', openAiRes.status, errBody)
     return NextResponse.json(
       { error: { message: 'Model request failed', type: 'upstream_error', code: openAiRes.status, detail: errBody } },
       { status: openAiRes.status }
@@ -378,7 +436,10 @@ export async function POST(req: NextRequest) {
           requestId,
           reasonCode: routing.reasonCode,
           model: realModel,
-          actualProvider: 'openai',
+          actualProvider: provider,
+          cost: costResult.actualCostMicro / 1e6,
+          baselineCost: costResult.baselineCostMicro / 1e6,
+          savings: costResult.savingsMicro / 1e6,
           ...costResult, why,
         })}\n\n`
         controller.enqueue(encoder.encode(metaChunk))
@@ -389,7 +450,7 @@ export async function POST(req: NextRequest) {
           promptPreview: getPromptPreview(messages),
           finishReason: streamFinishReason,
           latencyMs: Date.now() - reqStartMs,
-          cacheKeyPrefix: cacheKey.slice(6, 26),
+          cacheKeyPrefix: promptHash.slice(0, 20),
         })
       },
     })
@@ -407,13 +468,24 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 11. NON-STREAMING PATH ────────────────────────────────────────────
-  const responseBody = await openAiRes.json()
+  let responseBody: any
+  try {
+    responseBody = await openAiRes.json()
+  } catch (err) {
+    console.error('[vela] Failed to parse provider response JSON:', err)
+    return NextResponse.json(
+      { error: { message: 'Invalid response from provider', type: 'proxy_error', code: 502 } },
+      { status: 502 }
+    )
+  }
+
   const outputTokens = responseBody.usage?.completion_tokens ?? estimateTokens(
     responseBody.choices?.[0]?.message?.content ?? ''
   )
+  const actualInputTokens = responseBody.usage?.prompt_tokens ?? inputTokens
   const finishReason: string | undefined = responseBody.choices?.[0]?.finish_reason
   const latencyMs = Date.now() - reqStartMs
-  const costResult = computeCost(realModel, inputTokens, outputTokens)
+  const costResult = computeCost(realModel, actualInputTokens, outputTokens)
 
   // WHY V2 if flag set, with graceful fallback to V1
   const whyCtx = {
@@ -435,11 +507,11 @@ export async function POST(req: NextRequest) {
 
   void writeLog({
     userId, requestId, model: realModel, reasonCode: routing.reasonCode,
-    inputTokens, outputTokens, costResult, isCacheHit: false,
+    inputTokens: actualInputTokens, outputTokens, costResult, isCacheHit: false,
     promptPreview: getPromptPreview(messages),
     finishReason,
     latencyMs,
-    cacheKeyPrefix: cacheKey.slice(6, 26),
+    cacheKeyPrefix: promptHash.slice(0, 20),
   })
 
   return NextResponse.json(
@@ -449,11 +521,14 @@ export async function POST(req: NextRequest) {
         requestId,
         reasonCode: routing.reasonCode,
         model: realModel,
-        actualProvider: 'openai',
+        actualProvider: provider,
         actualCostMicro:   costResult.actualCostMicro,
         baselineCostMicro: costResult.baselineCostMicro,
         savingsMicro:      costResult.savingsMicro,
         savingsPct:        costResult.savingsPct,
+        cost:              costResult.actualCostMicro / 1e6,
+        baselineCost:      costResult.baselineCostMicro / 1e6,
+        savings:           costResult.savingsMicro / 1e6,
         why,
       },
     },

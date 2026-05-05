@@ -6,6 +6,7 @@ export type AutopilotAction =
 export interface BudgetState {
   spentTodayMicro: number
   dailyLimitMicro: number
+  requestsToday: number
 }
 
 export interface UserSettings {
@@ -22,7 +23,9 @@ export function autopilot(budget: BudgetState, settings: UserSettings): Autopilo
   const pct = budget.spentTodayMicro / hardCap
   const threshold = Math.min(Math.max(settings.autoDowngradeAt, 0.5), 0.99)
 
-  if (pct >= threshold) {
+  // Guard: Only trigger if condition is stable (e.g., more than just 1 or 2 expensive requests)
+  // Ensure we have at least 5 requests today to avoid false positives on a single massive payload.
+  if (pct >= threshold && budget.requestsToday >= 5) {
     return { action: 'FORCE_MINI', reason: 'BUDGET_GUARD' }
   }
 

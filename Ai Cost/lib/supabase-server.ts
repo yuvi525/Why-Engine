@@ -1,27 +1,30 @@
-import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { decrypt } from '@/lib/crypto'
 
 export async function createServerSupabase() {
   const cookieStore = await cookies()
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value
-        },
-        set(name: string, value: string, options: any) {
-          try {
-            cookieStore.set({ name, value, ...options })
-          } catch (error) {}
-        },
-        remove(name: string, options: any) {
-          try {
-            cookieStore.set({ name, value: '', ...options })
-          } catch (error) {}
-        },
-      },
+  
+  // Return a mocked Supabase client that just supports auth.getUser()
+  // reading from our local bcrypt session cookie
+  return {
+    auth: {
+      async getUser() {
+        try {
+          const sessionCookie = cookieStore.get('vela_session')?.value
+          if (!sessionCookie) return { data: { user: null }, error: null }
+          
+          const raw = decrypt(sessionCookie)
+          const parsed = JSON.parse(raw)
+          
+          if (parsed && parsed.id && parsed.email) {
+            return { data: { user: { id: parsed.id, email: parsed.email } }, error: null }
+          }
+          
+          return { data: { user: null }, error: null }
+        } catch (err) {
+          return { data: { user: null }, error: null }
+        }
+      }
     }
-  )
+  } as any
 }

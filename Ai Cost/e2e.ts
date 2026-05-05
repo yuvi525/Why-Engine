@@ -1,9 +1,9 @@
-import fetch from 'node-fetch';
+// import fetch from 'node-fetch';
 import { prisma } from './lib/prisma';
-import dotenv from 'dotenv';
+// import dotenv from 'dotenv';
 import path from 'path';
 
-dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+// dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
 const PROXY_URL = 'http://localhost:3000/api/v1/chat/completions';
 
@@ -16,7 +16,7 @@ async function runTests() {
   let failed = 0;
   let testNumber = 1;
 
-  function assert(condition, message) {
+  function assert(condition: any, message: string) {
     if (condition) {
       console.log(`[PASS] Test ${testNumber}: ${message}`);
       passed++;
@@ -38,7 +38,7 @@ async function runTests() {
   
   const userRecord = await prisma.user.findUnique({ where: { id: USER_ID } });
   assert(userRecord !== null, 'User exists in the database');
-  assert(userRecord.encryptedApiKey !== null, 'User has OpenAI API key configured');
+  assert(userRecord?.encryptedApiKey !== null, 'User has OpenAI API key configured');
 
   // 3 & 4. PROXY & ROUTING TEST (Simple)
   console.log('\n--- 3 & 4. PROXY & ROUTING TEST (Simple Request) ---');

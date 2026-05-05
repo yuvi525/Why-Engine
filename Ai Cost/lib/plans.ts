@@ -3,7 +3,7 @@
  * All enforcement (proxy, UI, API) reads from here.
  */
 
-export type Plan = 'free' | 'pro' | 'scale'
+export type Plan = 'free' | 'pro' | 'pro_trial' | 'scale'
 
 export interface PlanConfig {
   name: string
@@ -40,6 +40,17 @@ export const PLAN_LIMITS: Record<Plan, PlanConfig> = {
     learningEngine:     false,
     supportLevel:       'Email',
   },
+  pro_trial: {
+    name:               'Pro Trial',
+    priceUsd:           0,
+    requestsPerDay:     2000,
+    dailyBudgetCapUsd:  50,
+    byokAllowed:        true,
+    v2RoutingAllowed:   true,
+    shadowAnalytics:    true,
+    learningEngine:     false,
+    supportLevel:       'Email',
+  },
   scale: {
     name:               'Scale',
     priceUsd:           99,
@@ -58,7 +69,7 @@ export const PLAN_LIMITS: Record<Plan, PlanConfig> = {
  * Always returns false for unlimited plans.
  */
 export function isOverRequestLimit(plan: Plan, requestsToday: number): boolean {
-  const limit = PLAN_LIMITS[plan].requestsPerDay
+  const limit = PLAN_LIMITS[plan]?.requestsPerDay ?? 50
   if (limit === -1) return false
   return requestsToday >= limit
 }
@@ -68,7 +79,25 @@ export function isOverRequestLimit(plan: Plan, requestsToday: number): boolean {
  * Returns 0 for unlimited plans.
  */
 export function requestUsagePct(plan: Plan, requestsToday: number): number {
-  const limit = PLAN_LIMITS[plan].requestsPerDay
+  const limit = PLAN_LIMITS[plan]?.requestsPerDay ?? 50
   if (limit === -1) return 0
   return Math.min(Math.round((requestsToday / limit) * 100), 100)
+}
+
+/**
+ * Resolves the effective plan for a user, handling trials and owner overrides.
+ */
+export function resolvePlan(user: { email?: string | null, role?: string | null, plan?: string | null, trialEndsAt?: Date | null }): Plan {
+  const isOwner = user?.email === 'yuvrajsingh2351@gmail.com' || user?.role === 'owner';
+  if (isOwner) return 'scale';
+
+  if (user?.plan === 'pro_trial') {
+    if (user.trialEndsAt && user.trialEndsAt > new Date()) {
+      return 'pro_trial';
+    } else {
+      return 'free';
+    }
+  }
+
+  return (user?.plan as Plan) || 'free';
 }

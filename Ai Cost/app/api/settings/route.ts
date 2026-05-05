@@ -3,7 +3,7 @@ import { createServerSupabase } from '@/lib/supabase-server'
 import { prisma } from '@/lib/prisma'
 import { encrypt, decrypt } from '@/lib/crypto'
 import { redis } from '@/lib/redis'
-import { PLAN_LIMITS, Plan } from '@/lib/plans'
+import { PLAN_LIMITS, Plan, resolvePlan } from '@/lib/plans'
 
 export async function GET() {
   const supabase = await createServerSupabase()
@@ -17,20 +17,22 @@ export async function GET() {
     }),
     prisma.user.findUnique({
       where: { id: user.id },
-      select: { encryptedApiKey: true, plan: true },
+      select: { encryptedApiKey: true, plan: true, role: true, email: true, trialEndsAt: true },
     }),
   ])
 
   const hasApiKey = !!userRow?.encryptedApiKey
-  const userPlan  = (userRow?.plan ?? 'free') as Plan
+  const userPlan  = resolvePlan(userRow as any)
 
   // Derive masked key prefix for display (e.g. "sk-proj-...")
   let keyMask: string | null = null
+  let provider: string | null = null
   if (userRow?.encryptedApiKey) {
     try {
       const { decrypt: dec } = await import('@/lib/crypto')
       const raw = dec(userRow.encryptedApiKey)
       keyMask = raw.slice(0, 8) + '…' + raw.slice(-4)
+      provider = raw.startsWith('sk-ant-') ? 'claude' : 'openai'
     } catch { keyMask = 'sk-****' }
   }
 
@@ -43,11 +45,23 @@ export async function GET() {
     v2WhyEnabled     = flags?.use_v2_why === '1'
   } catch { /* flags are non-critical — default to off */ }
 
+  const role = (userRow?.email === 'yuvrajsingh2351@gmail.com' || userRow?.role === 'owner') ? 'owner' : 'customer'
+  const planConfig = { ...PLAN_LIMITS[userPlan] }
+  if (role === 'owner') {
+    planConfig.v2RoutingAllowed = true
+    planConfig.shadowAnalytics = true
+    planConfig.requestsPerDay = -1
+  }
+
   return NextResponse.json({
     hasApiKey,
     keyMask,
+    provider,
+    email:          userRow?.email,
     plan:           userPlan,
-    planConfig:     PLAN_LIMITS[userPlan],
+    trialEndsAt:    userRow?.trialEndsAt,
+    role,
+    planConfig,
     requestsToday:  budget?.requestsToday    ?? 0,
     dailyLimitUsd:  (budget?.dailyLimitMicro ?? 5_000_000) / 1_000_000,
     autoDowngradeAt: budget?.autoDowngradeAt ?? 0.8,
