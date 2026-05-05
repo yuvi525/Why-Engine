@@ -14,15 +14,17 @@ const nav = [
 ]
 
 const PLAN_LABELS: Record<string, string> = {
-  free:  'Free',
-  pro:   'Pro',
-  scale: 'Scale',
+  free:      'Free',
+  pro:       'Pro',
+  pro_trial: 'Pro Trial',
+  scale:     'Scale',
 }
 
 const PLAN_COLORS: Record<string, string> = {
-  free:  'text-muted-foreground',
-  pro:   'text-blue-400',
-  scale: 'text-amber-400',
+  free:      'text-muted-foreground',
+  pro:       'text-blue-400',
+  pro_trial: 'text-purple-400',
+  scale:     'text-amber-400',
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

@@ -3,6 +3,7 @@ import { createServerSupabase } from '@/lib/supabase-server'
 import { prisma } from '@/lib/prisma'
 import { generateWHY } from '@/lib/proxy/why'
 import { ReasonCode } from '@/lib/proxy/decide'
+import { resolvePlan, getMonthlyRevenueMicro } from '@/lib/plans'
 
 export async function GET(req: NextRequest) {
   const supabase = await createServerSupabase()
@@ -81,6 +82,18 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Phase 11: Margin calculation
+  const userRow = await prisma.user.findUnique({ where: { id: user.id }, select: { email: true, role: true, plan: true, trialEndsAt: true } })
+  const effectivePlan = userRow ? resolvePlan(userRow) : 'free'
+  const monthlyRevenueMicro = getMonthlyRevenueMicro(effectivePlan)
+  // Pro-rate revenue: (days elapsed / days in month) * monthly revenue
+  const now = new Date()
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  const daysElapsed = now.getDate()
+  const proratedRevenueMicro = Math.round((daysElapsed / daysInMonth) * monthlyRevenueMicro)
+  const totalCostMicro = budget?.totalSpentMicro ?? 0
+  const marginMicroCalc = proratedRevenueMicro - totalCostMicro
+
   const responsePayload = {
     logs: logs.map(log => ({
       ...log,
@@ -110,6 +123,10 @@ export async function GET(req: NextRequest) {
       totalCostMicro:    budget?.totalSpentMicro    ?? 0,
       dailyLimitMicro:   budget?.dailyLimitMicro    ?? 5_000_000,
       spentBudgetMicro:  budget?.spentTodayMicro    ?? 0,
+      // Phase 11: Margin fields
+      totalRevenueMicro: proratedRevenueMicro,
+      marginMicro:       marginMicroCalc,
+      marginStatus:      marginMicroCalc > 0 ? 'profit' : marginMicroCalc < 0 ? 'loss' : 'break_even',
     },
     nextCursor: logs.length === limit ? logs.at(-1)!.createdAt.toISOString() : null,
   }

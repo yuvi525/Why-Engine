@@ -6,14 +6,14 @@ import { validateApiKey } from '@/lib/auth'
 import { decrypt } from '@/lib/crypto'
 import { classify, ClassifierInput } from '@/lib/proxy/classify'
 import { autopilot } from '@/lib/proxy/autopilot'
-import { decide, ReasonCode } from '@/lib/proxy/decide'
+import { decide, applyMarginOverride, ReasonCode } from '@/lib/proxy/decide'
 import { decideV2, runShadowDecision } from '@/lib/proxy/decideV2'
 import { computeCost, estimateTokens, PRICING } from '@/lib/proxy/cost'
 import { generateWHY } from '@/lib/proxy/why'
 import { generateWHY_v2 } from '@/lib/proxy/why-v2'
 import { computeQualitySignal, detectRetry } from '@/lib/proxy/feedback'
 import { updateUserContext, getUserContext } from '@/lib/proxy/context'
-import { PLAN_LIMITS, isOverRequestLimit, Plan, resolvePlan } from '@/lib/plans'
+import { PLAN_LIMITS, isOverRequestLimit, Plan, resolvePlan, getMonthlyRevenueMicro } from '@/lib/plans'
 import { detectProvider } from '@/lib/providers/detect'
 import { callClaudeAdapter } from '@/lib/providers/claude'
 
@@ -79,6 +79,13 @@ export async function POST(req: NextRequest) {
     )
   }
 
+  // ── 3b. OPTIONAL REQUEST CONTEXT (backward compatible) ──────────────
+  // Callers MAY pass these fields to enable per-customer / per-feature margin tracking.
+  // If missing → null. Never used for routing — only stored in DecisionLog.
+  const customerId: string | null = typeof body.customer_id === 'string' ? body.customer_id : null
+  const featureId:  string | null = typeof body.feature_id  === 'string' ? body.feature_id  : null
+  const userTier:   string | null = typeof body.user_tier   === 'string' ? body.user_tier   : null
+
   // ── 4. LOAD USER STATE ───────────────────────────────────────────────
   let user, budgetState
   try {
@@ -140,6 +147,17 @@ export async function POST(req: NextRequest) {
   // ── 4c. PLAN LIMIT ENFORCEMENT ────────────────────────────────────
   const userPlan = resolvePlan(user)
   const isOwner = userPlan === 'scale' // scale is returned for owner
+
+  // ── 4d. TRIAL EXPIRY CLEANUP (fire-and-forget) ─────────────────────
+  // If resolvePlan returned 'free' but DB still says 'pro_trial', the trial expired.
+  // Clean up the DB asynchronously so subsequent checks don't re-evaluate.
+  if (userPlan === 'free' && user.plan === 'pro_trial') {
+    void prisma.user.update({
+      where: { id: userId },
+      data: { plan: 'free', trialEndsAt: null },
+    }).catch(err => console.error('[vela] Trial expiry cleanup failed:', err))
+  }
+
   if (!isOwner && isOverRequestLimit(userPlan, budgetState.requestsToday)) {
     const limit = PLAN_LIMITS[userPlan].requestsPerDay
     return NextResponse.json(
@@ -239,7 +257,7 @@ export async function POST(req: NextRequest) {
   const promptHash = createHash('sha256')
     .update(JSON.stringify(messages))
     .digest('hex')
-  const cacheKey = `cache:${userId}:${body.model || 'unknown'}:${promptHash}`
+  const cacheKey = `cache:${userId}:${promptHash}`
 
   try {
     const cachedRaw = await redis.get<any>(cacheKey)
@@ -256,12 +274,20 @@ export async function POST(req: NextRequest) {
       }
       const why = generateWHY('CACHE_HIT', { model: 'cached', ...costResult })
 
+      // Phase 5: Margin for cache hits (cost = 0, revenue = full month)
+      const cacheRevenueMicro = getMonthlyRevenueMicro(userPlan)
+      const cacheMarginMicro = cacheRevenueMicro - 0 // cost is 0 for cache
+
       void writeLog({
         userId, requestId, model: 'gpt-4o-mini', reasonCode: 'CACHE_HIT',
         inputTokens, outputTokens: cachedBody.usage?.completion_tokens ?? 0,
         costResult, isCacheHit: true, promptPreview: getPromptPreview(messages),
         finishReason: 'cache', latencyMs: Date.now() - reqStartMs,
         cacheKeyPrefix: promptHash.slice(0, 20),
+        customerId, featureId, userTier,
+        revenueMicro: cacheRevenueMicro,
+        marginMicro: cacheMarginMicro,
+        marginStatus: cacheMarginMicro > 0 ? 'profit' : cacheMarginMicro < 0 ? 'loss' : 'break_even',
       })
 
       return NextResponse.json({
@@ -333,6 +359,22 @@ export async function POST(req: NextRequest) {
         // Shadow errors are always swallowed
       }
     })()
+  }
+
+  // ── Phase 6: Margin-aware routing override ───────────────────────────
+  // Applied AFTER decide()/V2 but BEFORE provider call.
+  // Enforces free-plan-always-mini and budget guard visibility.
+  if (!isOwner) {
+    const preModel = routing.model
+    const finalRouting = applyMarginOverride(routing, userPlan, budgetPct, budgetState.autoDowngradeAt)
+    if (finalRouting.model !== preModel) {
+      // Margin override changed the model — update realModel
+      realModel = providerModelMap[finalRouting.model] as RealModel
+      // Mutate routing so downstream (writeLog, response) uses the overridden reasonCode
+      ;(routing as any).model = finalRouting.model
+      ;(routing as any).reasonCode = finalRouting.reasonCode
+    }
+    console.log(`[vela/routing] ${preModel} → ${routing.model} (${routing.reasonCode})`)
   }
 
   // ── 9. EXECUTE via OpenAI or Claude ─────────────────────────────────────────────
@@ -444,6 +486,10 @@ export async function POST(req: NextRequest) {
         })}\n\n`
         controller.enqueue(encoder.encode(metaChunk))
 
+        // Phase 5: Margin for streaming
+        const streamRevenueMicro = getMonthlyRevenueMicro(userPlan)
+        const streamMarginMicro = streamRevenueMicro - costResult.actualCostMicro
+
         void writeLog({
           userId, requestId, model: realModel, reasonCode: routing.reasonCode,
           inputTokens, outputTokens, costResult, isCacheHit: false,
@@ -451,6 +497,10 @@ export async function POST(req: NextRequest) {
           finishReason: streamFinishReason,
           latencyMs: Date.now() - reqStartMs,
           cacheKeyPrefix: promptHash.slice(0, 20),
+          customerId, featureId, userTier,
+          revenueMicro: streamRevenueMicro,
+          marginMicro: streamMarginMicro,
+          marginStatus: streamMarginMicro > 0 ? 'profit' : streamMarginMicro < 0 ? 'loss' : 'break_even',
         })
       },
     })
@@ -505,6 +555,11 @@ export async function POST(req: NextRequest) {
   // Cache the response (TTL: 1 hour)
   void redis.setex(cacheKey, 3600, JSON.stringify(responseBody))
 
+  // Phase 5: Margin calculation
+  const revenueMicro = getMonthlyRevenueMicro(userPlan)
+  const marginMicro = revenueMicro - costResult.actualCostMicro
+  const marginStatus = marginMicro > 0 ? 'profit' : marginMicro < 0 ? 'loss' : 'break_even'
+
   void writeLog({
     userId, requestId, model: realModel, reasonCode: routing.reasonCode,
     inputTokens: actualInputTokens, outputTokens, costResult, isCacheHit: false,
@@ -512,6 +567,10 @@ export async function POST(req: NextRequest) {
     finishReason,
     latencyMs,
     cacheKeyPrefix: promptHash.slice(0, 20),
+    customerId, featureId, userTier,
+    revenueMicro,
+    marginMicro,
+    marginStatus,
   })
 
   return NextResponse.json(
@@ -529,6 +588,10 @@ export async function POST(req: NextRequest) {
         cost:              costResult.actualCostMicro / 1e6,
         baselineCost:      costResult.baselineCostMicro / 1e6,
         savings:           costResult.savingsMicro / 1e6,
+        // Phase 5/8: Margin fields
+        revenueMicro,
+        marginMicro,
+        marginStatus,
         why,
       },
     },
@@ -565,6 +628,13 @@ interface WriteLogParams {
   finishReason?: string
   latencyMs?: number
   cacheKeyPrefix?: string
+  // Phase 3/5 additions: margin + request context
+  customerId?: string | null
+  featureId?: string | null
+  userTier?: string | null
+  revenueMicro?: number | null
+  marginMicro?: number | null
+  marginStatus?: string | null
 }
 
 async function writeLog(params: WriteLogParams) {
@@ -572,6 +642,7 @@ async function writeLog(params: WriteLogParams) {
     userId, requestId, model, reasonCode, inputTokens, outputTokens,
     costResult, isCacheHit, promptPreview,
     finishReason, latencyMs, cacheKeyPrefix,
+    customerId, featureId, userTier, revenueMicro, marginMicro, marginStatus,
   } = params
 
   // ── Redis budget update (atomic pipeline) ──────────────────────────
@@ -621,6 +692,13 @@ async function writeLog(params: WriteLogParams) {
           latencyMs:     latencyMs    ?? null,
           qualitySignal: qualitySignal.signal,
           isRetry,
+          // Phase 3/5 fields: margin + request context (nullable):
+          customerId:    customerId   ?? null,
+          featureId:     featureId    ?? null,
+          userTier:      userTier     ?? null,
+          revenueMicro:  revenueMicro ?? null,
+          marginMicro:   marginMicro  ?? null,
+          marginStatus:  marginStatus ?? null,
         },
       }),
       prisma.budgetState.update({

@@ -8,6 +8,7 @@ export type Plan = 'free' | 'pro' | 'pro_trial' | 'scale'
 export interface PlanConfig {
   name: string
   priceUsd: number          // monthly price
+  revenuePerMonthMicro: number // monthly revenue in microdollars (priceUsd * 1_000_000)
   requestsPerDay: number    // -1 = unlimited
   dailyBudgetCapUsd: number // max daily budget allowed
   byokAllowed: boolean      // bring your own OpenAI key
@@ -21,6 +22,7 @@ export const PLAN_LIMITS: Record<Plan, PlanConfig> = {
   free: {
     name:               'Free',
     priceUsd:           0,
+    revenuePerMonthMicro: 0,
     requestsPerDay:     50,
     dailyBudgetCapUsd:  5,
     byokAllowed:        true,   // BYOK required — no platform key on free
@@ -32,6 +34,7 @@ export const PLAN_LIMITS: Record<Plan, PlanConfig> = {
   pro: {
     name:               'Pro',
     priceUsd:           29,
+    revenuePerMonthMicro: 29_000_000,
     requestsPerDay:     2000,
     dailyBudgetCapUsd:  50,
     byokAllowed:        true,
@@ -43,6 +46,7 @@ export const PLAN_LIMITS: Record<Plan, PlanConfig> = {
   pro_trial: {
     name:               'Pro Trial',
     priceUsd:           0,
+    revenuePerMonthMicro: 0,
     requestsPerDay:     2000,
     dailyBudgetCapUsd:  50,
     byokAllowed:        true,
@@ -54,6 +58,7 @@ export const PLAN_LIMITS: Record<Plan, PlanConfig> = {
   scale: {
     name:               'Scale',
     priceUsd:           99,
+    revenuePerMonthMicro: 99_000_000,
     requestsPerDay:     -1,       // unlimited
     dailyBudgetCapUsd:  500,
     byokAllowed:        true,
@@ -100,4 +105,12 @@ export function resolvePlan(user: { email?: string | null, role?: string | null,
   }
 
   return (user?.plan as Plan) || 'free';
+}
+
+/**
+ * Returns the monthly revenue in microdollars for a given plan.
+ * Free and trial plans generate $0 revenue.
+ */
+export function getMonthlyRevenueMicro(plan: Plan): number {
+  return PLAN_LIMITS[plan]?.revenuePerMonthMicro ?? 0
 }

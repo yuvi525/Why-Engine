@@ -15,6 +15,10 @@ interface Stats {
   spentBudgetMicro: number
   savingsThisMonthMicro: number
   streakDays: number
+  // Phase 11: Margin fields
+  totalRevenueMicro: number
+  marginMicro: number
+  marginStatus: string
 }
 
 interface Log {
@@ -500,18 +504,22 @@ function UpgradeTrigger({ stats, plan, role, trialEndsAt, onUpgrade }: { stats: 
 
 function UpgradeModal({ onClose, savedTotal }: { onClose: () => void, savedTotal?: number }) {
   const [loading, setLoading] = useState(false)
-  const [step, setStep] = useState<'offer' | 'trial' | 'contact'>('offer')
+  const [step, setStep] = useState<'offer' | 'trial'>('offer')
 
   const handleStartTrial = async () => {
     setLoading(true)
     try {
-      await fetch('/api/upgrade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'start_trial' }) })
-      window.location.reload()
-    } finally { setLoading(false) }
+      const res = await fetch('/api/upgrade', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'start_trial' }) })
+      if (res.ok) window.location.reload()
+    } catch (err) {
+      console.error('[vela] Trial activation failed:', err)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  // Razorpay direct payment link — replace with your live payment link
-  const RAZORPAY_PAYMENT_LINK = 'https://rzp.io/l/vela-pro'
+  // Razorpay payment link — reads from env var with fallback
+  const RAZORPAY_PAYMENT_LINK = process.env.NEXT_PUBLIC_RAZORPAY_PAYMENT_LINK || 'https://rzp.io/l/vela-pro'
 
   return (
     <AnimatePresence>
@@ -629,6 +637,7 @@ export default function DashboardPage() {
   const [recentSavings, setRecentSavings] = useState(0)
   const [plan, setPlan]             = useState<string>('free')
   const [role, setRole]             = useState<string>('customer')
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [trialEndsAt, setTrialEndsAt] = useState<string | null>(null)
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
 
@@ -667,6 +676,7 @@ export default function DashboardPage() {
             setPlan(settData.plan || 'free')
             setRole(settData.role || 'customer')
             setTrialEndsAt(settData.trialEndsAt || null)
+            setSettingsLoaded(true)
           }
         })
         .catch(err => {
@@ -740,7 +750,8 @@ export default function DashboardPage() {
   const s: Stats = stats ?? {
     savingsTodayMicro: 0, spentTodayMicro: 0, baselineTodayMicro: 0,
     requestsToday: 0, savingsTotalMicro: 0, totalCostMicro: 0, dailyLimitMicro: 5_000_000, spentBudgetMicro: 0,
-    savingsThisMonthMicro: 0, streakDays: 0
+    savingsThisMonthMicro: 0, streakDays: 0,
+    totalRevenueMicro: 0, marginMicro: 0, marginStatus: 'break_even',
   }
 
   return (
@@ -766,7 +777,7 @@ export default function DashboardPage() {
               </span>
             )}
           </div>
-          {plan === 'free' && role !== 'owner' && (
+          {settingsLoaded && plan === 'free' && role !== 'owner' && (
             <button onClick={() => setShowUpgradeModal(true)} className="px-4 py-2 bg-primary/10 hover:bg-primary/20 border border-primary/30 text-primary font-bold rounded-xl text-sm transition">
               Upgrade Plan
             </button>
@@ -868,6 +879,20 @@ export default function DashboardPage() {
             </div>
           </div>
         </motion.div>
+
+        {/* Phase 11: Margin Indicator Card */}
+        <StatCard
+          icon={<Shield className="w-5 h-5" />}
+          label="Margin"
+          value={
+            <span className={s.marginMicro >= 0 ? 'text-primary' : 'text-destructive'}>
+              <CountUp value={s.marginMicro / 1e6} prefix="₹" decimals={2} />
+            </span>
+          }
+          sub={s.marginStatus === 'profit' ? 'You are profitable' : s.marginStatus === 'loss' ? 'AI costs exceed plan revenue' : 'Break even'}
+          delay={0.35}
+          accent={s.marginMicro > 0}
+        />
       </div>
 
       {/* Budget */}

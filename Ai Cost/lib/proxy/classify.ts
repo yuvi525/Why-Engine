@@ -42,8 +42,10 @@ export function classify(input: ClassifierInput): ComplexityScore {
   const lowerText = fullText.toLowerCase()
   if (simpleKeywords.some(kw => lowerText.startsWith(kw))) score -= 2
 
+  // Signal 6: Short single message discount — only if no complex signals present
+  const hasComplexSignals = complexKeywords.some(kw => lowerText.includes(kw))
   const userMessages = input.messages.filter(m => m.role === 'user')
-  if (userMessages.length === 1 && input.totalInputTokens < 100) score -= 2
+  if (userMessages.length === 1 && input.totalInputTokens < 100 && !hasComplexSignals) score -= 2
 
   return score >= 4 ? 1 : 0
 }

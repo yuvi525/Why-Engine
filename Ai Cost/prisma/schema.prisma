@@ -83,11 +83,21 @@ model DecisionLog {
   qualitySignal     String?           // "positive" | "neutral" | "negative"
   isRetry           Boolean           @default(false)
 
+  // ── Phase 3 additions: margin + request context (nullable) ──
+  customerId        String?           // from request body customer_id
+  featureId         String?           // from request body feature_id
+  userTier          String?           // from request body user_tier
+  revenueMicro      Int?              // plan monthly revenue in microdollars at time of request
+  marginMicro       Int?              // revenueMicro - actualCostMicro (can be negative)
+  marginStatus      String?           // "profit" | "loss" | "break_even"
+
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([qualitySignal])
   @@index([isRetry])
+  @@index([customerId])
+  @@index([featureId])
 }
 
 // ─────────────────────────────────────────────────────────────
