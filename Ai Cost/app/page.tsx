@@ -109,20 +109,20 @@ export default function LandingPage() {
 
           <div className="flex items-center justify-center gap-2 text-sm font-medium text-emerald-400 mb-16">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            Users saved ₹24,500 today
+            Live proxy — routing AI requests in real time
           </div>
 
           {/* Stats Preview */}
           <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto mb-16">
             <motion.div whileHover={{ scale: 1.02 }} className="glass-card rounded-2xl p-5 text-center">
               <TrendingDown className="w-6 h-6 text-primary mx-auto mb-3" />
-              <p className="text-4xl font-bold text-foreground">84%</p>
-              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider mt-1">Average Savings</p>
+              <p className="text-4xl font-bold text-foreground">60–90%</p>
+              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider mt-1">Cost Reduction</p>
             </motion.div>
             <motion.div whileHover={{ scale: 1.02 }} className="glass-card rounded-2xl p-5 text-center">
               <Zap className="w-6 h-6 text-blue-400 mx-auto mb-3 glow-blue" />
-              <p className="text-4xl font-bold text-foreground">15ms</p>
-              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider mt-1">Routing Latency</p>
+              <p className="text-4xl font-bold text-foreground">&lt;15ms</p>
+              <p className="text-xs text-muted-foreground font-semibold uppercase tracking-wider mt-1">Routing Overhead</p>
             </motion.div>
           </div>
         </motion.div>

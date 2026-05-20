@@ -172,7 +172,7 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
                 <span className="text-primary">import</span> OpenAI <span className="text-primary">from</span> 'openai'<br/><br/>
                 <span className="text-primary">const</span> client = <span className="text-primary">new</span> OpenAI({'{'}<br/>
                 &nbsp;&nbsp;apiKey: <span className="text-amber-500">'{apiKey}'</span>,<br/>
-                &nbsp;&nbsp;baseURL: <span className="text-amber-500">'http://localhost:3000/api/v1'</span><br/>
+                &nbsp;&nbsp;baseURL: <span className="text-amber-500">'{typeof window !== "undefined" ? (process.env.NEXT_PUBLIC_APP_URL || window.location.origin) : "https://your-domain.com"}/api/v1'</span><br/>
                 {'}'})
               </div>
 

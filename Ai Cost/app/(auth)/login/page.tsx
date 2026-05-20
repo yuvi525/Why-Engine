@@ -153,7 +153,7 @@ export default function LoginPage() {
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-6 opacity-50">
-          Vela Autopilot · Powered by LiteLLM
+          Vela Autopilot · AI Cost Intelligence
         </p>
       </motion.div>
     </div>

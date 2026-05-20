@@ -42,13 +42,13 @@ export function computeCost(
 }
 
 export function formatMicro(micro: number): string {
-  return `₹${(micro / 1_000_000).toFixed(6)}`
+  return `$${(micro / 1_000_000).toFixed(6)}`
 }
 
 export function formatMicroDisplay(micro: number): string {
   const usd = micro / 1_000_000
-  if (usd >= 0.01) return `₹${usd.toFixed(2)}`
-  return `₹${usd.toFixed(4)}`
+  if (usd >= 0.01) return `$${usd.toFixed(2)}`
+  return `$${usd.toFixed(4)}`
 }
 
 export function estimateTokens(text: string): number {

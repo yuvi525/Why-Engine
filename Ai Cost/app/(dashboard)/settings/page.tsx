@@ -184,6 +184,9 @@ export default function SettingsPage() {
   const usagePct   = dailyLimit === -1 ? 0 : Math.min(Math.round((requestsToday / dailyLimit) * 100), 100)
   const nearLimit  = !isOwner && usagePct >= 80
 
+  // Dynamic proxy base URL — uses env var in production, window.location.origin locally
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')
+
   // ── Render ───────────────────────────────────────────────────────────
 
   return (
@@ -474,8 +477,8 @@ export default function SettingsPage() {
         <div className="px-6 py-4 bg-secondary/10 border-b border-border">
           <p className="text-xs text-muted-foreground mb-2 font-semibold uppercase tracking-wider">Proxy Endpoint</p>
           <div className="flex items-center gap-2 bg-secondary rounded-xl px-4 py-2.5">
-            <code className="text-xs font-mono text-primary flex-1">http://localhost:3000/api/v1/chat/completions</code>
-            <CopyButton text="http://localhost:3000/api/v1/chat/completions" />
+            <code className="text-xs font-mono text-primary flex-1">{baseUrl}/api/v1/chat/completions</code>
+            <CopyButton text={`${baseUrl}/api/v1/chat/completions`} />
           </div>
         </div>
 
@@ -529,7 +532,7 @@ export default function SettingsPage() {
 
 const client = new OpenAI({
   apiKey: 'vk_live_YOUR_KEY',
-  baseURL: 'http://localhost:3000/api/v1'
+  baseURL: '${baseUrl}/api/v1'
 })
 
 const response = await client.chat.completions.create({
