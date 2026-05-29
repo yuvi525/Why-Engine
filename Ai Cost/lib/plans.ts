@@ -93,7 +93,8 @@ export function requestUsagePct(plan: Plan, requestsToday: number): number {
  * Resolves the effective plan for a user, handling trials and owner overrides.
  */
 export function resolvePlan(user: { email?: string | null, role?: string | null, plan?: string | null, trialEndsAt?: Date | null }): Plan {
-  const isOwner = user?.email === 'yuvrajsingh2351@gmail.com' || user?.role === 'owner';
+  const ownerEmail = process.env.OWNER_EMAIL ?? ''
+  const isOwner = user?.role === 'owner' || (ownerEmail && user?.email === ownerEmail)
   if (isOwner) return 'scale';
 
   if (user?.plan === 'pro_trial') {

@@ -1,157 +1,291 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { Check, Zap, ArrowRight, ExternalLink } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { CheckCircle2, Zap, ArrowRight, Shield } from 'lucide-react'
+import Link from 'next/link'
+
+const PLANS = [
+  {
+    key:     'free',
+    name:    'Free',
+    price:   '$0',
+    period:  '/mo',
+    badge:   null,
+    desc:    'Get started and see the savings.',
+    features: [
+      '50 requests / day',
+      '$5 daily budget cap',
+      'V1 smart routing',
+      'Cost dashboard',
+      'WHY Engine',
+      'Community support',
+    ],
+    unavailable: ['V2 5-tier routing', 'Shadow analytics', 'ROI Intelligence', 'Priority support'],
+    cta:     'Current plan',
+    ctaFree: true,
+  },
+  {
+    key:     'pro',
+    name:    'Pro',
+    price:   '$29',
+    period:  '/mo',
+    badge:   'Most Popular',
+    desc:    'For teams serious about AI cost control.',
+    features: [
+      '2,000 requests / day',
+      '$50 daily budget cap',
+      'V2 5-tier routing',
+      'Shadow analytics',
+      'ROI Intelligence',
+      'Attribution by customer & feature',
+      'Governance policies',
+      'Alert engine',
+      'Email support',
+    ],
+    unavailable: [],
+    cta:     'Upgrade to Pro',
+    ctaFree: false,
+    plan:    'pro',
+  },
+  {
+    key:     'scale',
+    name:    'Scale',
+    price:   '$99',
+    period:  '/mo',
+    badge:   null,
+    desc:    'Unlimited scale with full intelligence.',
+    features: [
+      'Unlimited requests',
+      '$500 daily budget cap',
+      'Everything in Pro',
+      'Learning engine',
+      'Full audit log export',
+      'Priority support',
+      'Early access to new features',
+    ],
+    unavailable: [],
+    cta:     'Upgrade to Scale',
+    ctaFree: false,
+    plan:    'scale',
+  },
+]
 
 export default function PricingPage() {
-  const [loading, setLoading] = useState(false)
+  const router = useRouter()
+  const [currentPlan, setCurrentPlan] = useState<string>('free')
+  const [loading, setLoading]         = useState(false)
+  const [upgrading, setUpgrading]     = useState<string | null>(null)
+  const [error, setError]             = useState('')
+  const [billingConfigured, setBillingConfigured] = useState<boolean>(true)
 
-  const handleStartTrial = async () => {
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.plan) setCurrentPlan(d.plan)
+        if (d && d.billingConfigured !== undefined) setBillingConfigured(d.billingConfigured)
+      })
+      .catch(() => {})
+  }, [])
+
+  const handleUpgrade = async (planKey: string) => {
+    setUpgrading(planKey); setError('')
+    try {
+      const res = await fetch('/api/stripe/create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: planKey }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        if (data.error === 'stripe_not_configured') {
+          setError('Stripe is not yet configured. Contact support to upgrade.')
+        } else {
+          setError(data.error ?? 'Failed to start checkout')
+        }
+        return
+      }
+      if (data.url) window.location.href = data.url
+    } catch {
+      setError('Failed to connect to checkout. Please try again.')
+    } finally {
+      setUpgrading(null)
+    }
+  }
+
+  const handleTrial = async () => {
     setLoading(true)
     try {
-      await fetch('/api/upgrade', { method: 'POST', body: JSON.stringify({ action: 'start_trial' }) })
-      window.location.href = '/dashboard'
+      await fetch('/api/upgrade?action=start_trial', { method: 'POST' })
+      router.push('/dashboard?trial=started')
     } finally {
       setLoading(false)
     }
   }
 
-  const handleUpgradeClick = async () => {
-    setLoading(true)
-    try {
-      // Mock payment flow
-      await fetch('/api/upgrade', { method: 'POST', body: JSON.stringify({ action: 'upgrade_pro' }) })
-      window.location.href = '/dashboard'
-    } finally {
-      setLoading(false)
-    }
-  };
+  const isCurrentOrHigher = (planKey: string) => {
+    const order = ['free', 'pro_trial', 'pro', 'scale']
+    return order.indexOf(currentPlan) >= order.indexOf(planKey)
+  }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-12">
-      <div className="text-center space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight">Simple, Transparent Pricing</h1>
-        <p className="text-muted-foreground text-lg">Pays for itself after ₹700 usage.</p>
+    <div className="space-y-8 max-w-5xl mx-auto">
+      {/* Header */}
+      <div className="text-center">
+        <h1 className="text-2xl font-bold text-foreground">Simple, transparent pricing</h1>
+        <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto">
+          Vela pays for itself. Average users save 60–80% on AI costs vs paying full GPT-4o prices.
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4">
-        {/* Free Plan */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-card rounded-2xl p-8 flex flex-col"
-        >
-          <div className="mb-6">
-            <h3 className="text-xl font-bold text-foreground mb-2">Free</h3>
-            <p className="text-muted-foreground text-sm">Perfect to test the waters</p>
-            <div className="mt-4 flex items-baseline gap-1">
-              <span className="text-4xl font-bold">₹0</span>
-              <span className="text-muted-foreground text-sm">/mo</span>
-            </div>
-          </div>
-          <ul className="space-y-4 mb-8 flex-1 text-sm text-foreground/90">
-            <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-muted-foreground shrink-0" /> 500 requests/day</li>
-            <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-muted-foreground shrink-0" /> Basic autopilot</li>
-            <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-muted-foreground shrink-0" /> Standard routing</li>
-          </ul>
-          <button disabled={loading} onClick={handleStartTrial} className="w-full py-2.5 rounded-xl bg-secondary text-foreground font-semibold hover:bg-secondary/80 transition">Start 14-Day Free Trial</button>
-        </motion.div>
-
-        {/* Pro Plan */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="glass-card rounded-2xl p-8 flex flex-col border border-primary/40 relative glow-green md:scale-[1.03] z-10"
-        >
-          <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-primary to-blue-500 rounded-t-2xl" />
-          <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-full shadow-[0_0_12px_rgba(16,185,129,0.4)]">
-            Most Popular
-          </div>
-          <div className="mb-6">
-            <h3 className="text-xl font-bold text-foreground mb-2">Pro</h3>
-            <p className="text-primary text-sm font-medium">Unlocks more savings</p>
-            <div className="mt-4 flex items-baseline gap-1">
-              <span className="text-4xl font-bold">₹2,499</span>
-              <span className="text-muted-foreground text-sm">/mo</span>
-            </div>
-          </div>
-          <ul className="space-y-4 mb-8 flex-1 text-sm text-foreground/90">
-            <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-primary shrink-0" /> Unlimited requests</li>
-            <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-primary shrink-0" /> Advanced autopilot</li>
-            <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-primary shrink-0" /> Better optimization</li>
-          </ul>
-          <button disabled={loading} onClick={handleUpgradeClick} className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold hover:bg-primary/90 transition shadow-[0_0_15px_rgba(16,185,129,0.4)]">Unlock full savings (Pay)</button>
-        </motion.div>
-
-        {/* Scale Plan */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="glass-card rounded-2xl p-8 flex flex-col"
-        >
-          <div className="mb-6">
-            <h3 className="text-xl font-bold text-foreground mb-2">Scale</h3>
-            <p className="text-muted-foreground text-sm">For high-volume teams</p>
-            <div className="mt-4 flex items-baseline gap-1">
-              <span className="text-4xl font-bold">₹8,499</span>
-              <span className="text-muted-foreground text-sm">/mo</span>
-            </div>
-          </div>
-          <ul className="space-y-4 mb-8 flex-1 text-sm text-foreground/90">
-            <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-blue-400 shrink-0" /> Highest limits</li>
-            <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-blue-400 shrink-0" /> Priority routing</li>
-            <li className="flex gap-3"><CheckCircle2 className="w-5 h-5 text-blue-400 shrink-0" /> Max savings</li>
-          </ul>
-          <button onClick={handleUpgradeClick} className="w-full py-2.5 rounded-xl bg-secondary text-foreground font-semibold hover:bg-secondary/80 transition">Contact Sales</button>
-        </motion.div>
-      </div>
-
-      {/* ROI & Savings Explanation */}
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
-        className="glass-card rounded-2xl p-8 border border-primary/20 bg-primary/5"
-      >
-        <div className="text-center mb-8">
-          <h3 className="text-2xl font-bold text-foreground mb-2">The ROI of Vela Autopilot</h3>
-          <p className="text-muted-foreground text-sm">How we guarantee your software pays for itself.</p>
+      {error && (
+        <div className="px-4 py-3 rounded-xl text-sm text-center"
+          style={{ background: 'rgba(239,68,68,0.08)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
+          {error}
         </div>
-        
-        <div className="grid md:grid-cols-3 gap-8">
-          <div className="space-y-3">
-            <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center mb-4">
+      )}
+
+      {/* Plan cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        {PLANS.map((plan, i) => {
+          const isCurrent   = currentPlan === plan.key || (currentPlan === 'pro_trial' && plan.key === 'pro')
+          const isHigher    = isCurrentOrHigher(plan.key)
+          const isPopular   = plan.badge === 'Most Popular'
+
+          return (
+            <motion.div key={plan.key} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.08 }}
+              className="card p-6 flex flex-col relative"
+              style={isPopular ? { border: '1.5px solid var(--primary)', boxShadow: '0 0 30px rgba(99,102,241,0.12)' } : {}}>
+
+              {plan.badge && (
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full text-xs font-semibold text-white"
+                  style={{ background: 'var(--primary)' }}>
+                  {plan.badge}
+                </div>
+              )}
+
+              {/* Plan name + price */}
+              <div className="mb-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <p className="font-bold text-foreground">{plan.name}</p>
+                  {isCurrent && (
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium"
+                      style={{ background: 'var(--accent-muted)', color: 'var(--accent)' }}>
+                      Current
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-end gap-0.5">
+                  <span className="text-3xl font-black text-foreground">{plan.price}</span>
+                  <span className="text-sm text-muted-foreground mb-0.5">{plan.period}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">{plan.desc}</p>
+              </div>
+
+              {/* CTA */}
+              <div className="mb-5">
+                {plan.ctaFree ? (
+                  <div className="w-full py-2 rounded-lg text-center text-sm font-medium"
+                    style={{ background: 'var(--secondary)', color: 'var(--muted-foreground)' }}>
+                    {isCurrent ? 'Current plan' : 'Free forever'}
+                  </div>
+                ) : !billingConfigured ? (
+                  <div className="w-full py-2 rounded-lg text-center text-sm font-medium border"
+                    style={{ borderColor: 'var(--border)', color: 'var(--muted-foreground)' }}>
+                    Billing Coming Soon
+                  </div>
+                ) : isCurrent ? (
+                  <div className="w-full py-2 rounded-lg text-center text-sm font-medium"
+                    style={{ background: 'var(--accent-muted)', color: 'var(--accent)' }}>
+                    ✓ Active
+                  </div>
+                ) : (
+                  <button onClick={() => handleUpgrade(plan.plan!)}
+                    disabled={upgrading === plan.plan || isHigher}
+                    className={`btn w-full flex items-center justify-center gap-2 ${isPopular ? 'btn-primary' : ''}`}
+                    style={!isPopular ? { border: '1px solid var(--border)' } : {}}>
+                    {upgrading === plan.plan ? 'Redirecting...' : (
+                      <><span>{plan.cta}</span><ArrowRight className="w-3.5 h-3.5" /></>
+                    )}
+                  </button>
+                )}
+              </div>
+
+              {/* Features */}
+              <div className="flex-1 space-y-2">
+                {plan.features.map(f => (
+                  <div key={f} className="flex items-start gap-2">
+                    <Check className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" style={{ color: 'var(--accent)' }} />
+                    <span className="text-xs text-foreground">{f}</span>
+                  </div>
+                ))}
+                {plan.unavailable.map(f => (
+                  <div key={f} className="flex items-start gap-2 opacity-35">
+                    <div className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 flex items-center justify-center">
+                      <div className="w-2.5 h-px rounded-full bg-muted-foreground" />
+                    </div>
+                    <span className="text-xs text-muted-foreground line-through">{f}</span>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )
+        })}
+      </div>
+
+      {/* Trial CTA */}
+      {currentPlan === 'free' && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }}
+          className="card p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: 'rgba(99,102,241,0.1)' }}>
               <Zap className="w-5 h-5 text-primary" />
             </div>
-            <h4 className="font-semibold text-foreground">Immediate Savings</h4>
-            <p className="text-sm text-muted-foreground">Vela automatically downgrades simple queries to cheaper models, saving you up to 90% on everyday API calls.</p>
-          </div>
-          
-          <div className="space-y-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center mb-4">
-              <ArrowRight className="w-5 h-5 text-blue-500" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">Try Pro free for 14 days</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                No credit card required. Full V2 routing + ROI Intelligence unlocked immediately.
+              </p>
             </div>
-            <h4 className="font-semibold text-foreground">Zero Compromise</h4>
-            <p className="text-sm text-muted-foreground">Complex tasks still route to premium models (like GPT-4o), ensuring your application quality never degrades.</p>
           </div>
-          
-          <div className="space-y-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center mb-4">
-              <CheckCircle2 className="w-5 h-5 text-amber-500" />
-            </div>
-            <h4 className="font-semibold text-foreground">Guaranteed ROI</h4>
-            <p className="text-sm text-muted-foreground">Once you process more than ₹700 of AI usage through Vela, the Pro plan pays for itself in direct cost reductions.</p>
-          </div>
-        </div>
-      </motion.div>
-      
-      <div className="text-center pt-8 border-t border-border/50">
-        <p className="text-sm text-muted-foreground flex items-center justify-center gap-2">
-          <Shield className="w-4 h-4" /> Trusted by engineering teams everywhere.
+          <button onClick={handleTrial} disabled={loading}
+            className="btn flex items-center gap-2 flex-shrink-0"
+            style={{ border: '1px solid var(--primary)', color: 'var(--primary)' }}>
+            {loading ? 'Starting...' : <><span>Start Free Trial</span><ArrowRight className="w-3.5 h-3.5" /></>}
+          </button>
+        </motion.div>
+      )}
+
+      {/* Payment options note */}
+      <div className="text-center space-y-1">
+        <p className="text-xs text-muted-foreground">
+          Payments via Stripe (US / EU / international) · Razorpay available for Indian customers
         </p>
+        <p className="text-xs text-muted-foreground">
+          Need a custom plan for a team?{' '}
+          <a href="mailto:support@yourdomain.com" className="underline" style={{ color: 'var(--primary)' }}>
+            Contact us
+          </a>
+        </p>
+      </div>
+
+      {/* FAQ */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
+        {[
+          { q: 'What is BYOK?', a: 'Bring Your Own Key — you connect your own OpenAI or Claude API key. Vela routes and tracks spend on your key, never charging provider markup.' },
+          { q: 'How does Vela save money?', a: 'Vela automatically routes simple requests to GPT-4o-mini (which costs 16× less) and complex requests to GPT-4o. You pay only for what\'s needed.' },
+          { q: 'Can I cancel anytime?', a: 'Yes. Cancel from the Stripe billing portal. Your account downgrades to Free at the next billing cycle.' },
+          { q: 'Is my API key safe?', a: 'Yes. We encrypt it with AES-256-GCM. We never store or transmit it in plaintext. You can revoke it any time from Settings.' },
+        ].map(item => (
+          <div key={item.q} className="space-y-1">
+            <p className="text-sm font-semibold text-foreground">{item.q}</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">{item.a}</p>
+          </div>
+        ))}
       </div>
     </div>
   )

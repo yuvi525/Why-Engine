@@ -3,604 +3,419 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Key, Plus, Trash2, Settings, Copy, Check,
-  Zap, FlaskConical, Eye, EyeOff, Shield,
-  ShieldCheck, TrendingUp, AlertTriangle, X,
+  Key, Plus, Trash2, Copy, Check, Zap, Eye, EyeOff,
+  Shield, ShieldCheck, AlertTriangle, X, Settings, FlaskConical,
 } from 'lucide-react'
 
-// ── Helpers ───────────────────────────────────────────────────────────
-
-function CopyButton({ text }: { text: string }) {
+// ── Helpers ────────────────────────────────────────────────────────────────
+function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
   return (
     <button
       onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
-      className="text-muted-foreground hover:text-foreground transition p-1 rounded"
+      className="btn btn-ghost btn-sm p-1.5"
     >
-      {copied ? <Check className="w-3.5 h-3.5 text-primary" /> : <Copy className="w-3.5 h-3.5" />}
+      {copied ? <Check className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} /> : <Copy className="w-3.5 h-3.5" />}
     </button>
   )
 }
 
-function Toggle({
-  id, checked, onChange, disabled,
-}: { id: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+function Toggle({ checked, onChange, disabled }: {
+  checked: boolean; onChange: (v: boolean) => void; disabled?: boolean
+}) {
   return (
     <button
-      id={id}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${
-        checked ? 'bg-primary' : 'bg-secondary'
-      } disabled:opacity-50`}
+      className="relative w-10 h-5 rounded-full transition-colors"
+      style={{
+        background: checked ? 'var(--primary)' : 'var(--secondary)',
+        opacity: disabled ? 0.4 : 1,
+      }}
     >
-      <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
-        checked ? 'translate-x-5' : 'translate-x-0'
-      }`} />
+      <span
+        className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all"
+        style={{ left: checked ? 'calc(100% - 18px)' : '2px' }}
+      />
     </button>
   )
 }
 
-const PLAN_COLORS: Record<string, string> = {
-  free:      'bg-secondary text-muted-foreground border border-border',
-  pro:       'bg-blue-900/30 text-blue-400 border border-blue-900/50',
-  pro_trial: 'bg-purple-900/30 text-purple-400 border border-purple-900/50',
-  scale:     'bg-amber-900/30 text-amber-400 border border-amber-900/50',
-}
-
-// ── Main Component ────────────────────────────────────────────────────
-
+// ── Main Component ─────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const [keys, setKeys]             = useState<any[]>([])
   const [keysLoading, setKeysLoading] = useState(false)
   const [newKey, setNewKey]         = useState<string | null>(null)
 
-  // Settings state (loaded from /api/settings)
   const [settings, setSettings]     = useState<any>(null)
   const [settingsLoading, setSettingsLoading] = useState(true)
 
-  // BYOK state
-  const [openAiInput, setOpenAiInput]   = useState('')
-  const [showKey, setShowKey]           = useState(false)
-  const [byokSaving, setByokSaving]     = useState(false)
-  const [byokError, setByokError]       = useState('')
-  const [byokSuccess, setByokSuccess]   = useState(false)
+  // BYOK
+  const [openAiInput, setOpenAiInput] = useState('')
+  const [showKey, setShowKey]         = useState(false)
+  const [byokSaving, setByokSaving]   = useState(false)
+  const [byokError, setByokError]     = useState('')
+  const [byokSuccess, setByokSuccess] = useState(false)
 
-  // Flag state
+  // Budget
+  const [dailyLimitInput, setDailyLimitInput] = useState('')
+  const [budgetSaving, setBudgetSaving]       = useState(false)
+  const [budgetSuccess, setBudgetSuccess]     = useState(false)
+
+  // Flags
   const [v2Routing, setV2Routing]   = useState(false)
   const [v2Why, setV2Why]           = useState(false)
   const [flagSaving, setFlagSaving] = useState(false)
 
-  // Upgrade banner
-  const [showUpgradeBanner, setShowUpgradeBanner] = useState(false)
-
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  // ── Data loading ────────────────────────────────────────────────────
-
   const fetchKeys = () =>
-    fetch('/api/keys').then(r => r.json()).then(d => setKeys(d.keys || []))
+    fetch('/api/keys').then(r => r.json()).then(d => setKeys(d.keys || [])).catch(() => {})
 
   const fetchSettings = () =>
     fetch('/api/settings')
       .then(async r => {
-        if (!r.ok) return // fail silently — keep current state
+        if (!r.ok) return
         const d = await r.json().catch(() => null)
         if (!d) return
         setSettings(d)
         setV2Routing(d.v2RoutingEnabled ?? false)
         setV2Why(d.v2WhyEnabled ?? false)
-        // Show upgrade banner only for free customers who are active users
-        const ownerEmail = 'yuvrajsingh2351@gmail.com'
-        const isOwnerUser = d.email === ownerEmail || d.role === 'owner'
-        if (!isOwnerUser && d.plan === 'free' && (d.requestsToday ?? 0) > 30) {
-          setShowUpgradeBanner(true)
-        }
+        setDailyLimitInput(String(d.dailyLimitUsd ?? 5))
       })
       .finally(() => setSettingsLoading(false))
 
-  useEffect(() => {
-    fetchKeys()
-    fetchSettings()
-  }, [])
+  useEffect(() => { fetchKeys(); fetchSettings() }, [])
 
-  // ── Actions ─────────────────────────────────────────────────────────
-
+  // ── Actions ────────────────────────────────────────────────────────────
   const createKey = async () => {
-    setKeysLoading(true)
-    setNewKey(null)
+    setKeysLoading(true); setNewKey(null)
     try {
-      const res  = await fetch('/api/keys', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label: 'Vela API Key' }),
-      })
-      if (!res.ok) return
+      const res  = await fetch('/api/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label: 'Vela API Key' }) })
       const data = await res.json().catch(() => null)
       if (data?.key) { setNewKey(data.key); fetchKeys() }
-    } catch { /* non-critical */ } finally {
-      setKeysLoading(false)
-    }
+    } finally { setKeysLoading(false) }
   }
 
   const revokeKey = async (id: string) => {
-    if (!confirm('Revoke this API key? This cannot be undone.')) return
+    if (!confirm('Revoke this key? This cannot be undone.')) return
     await fetch(`/api/keys/${id}`, { method: 'DELETE' })
     fetchKeys()
   }
 
   const saveByok = async () => {
-    setByokSaving(true)
-    setByokError('')
-    setByokSuccess(false)
+    setByokSaving(true); setByokError(''); setByokSuccess(false)
     try {
-      const res  = await fetch('/api/settings', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ openAiKey: openAiInput.trim() }),
-      })
+      const res  = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ openAiKey: openAiInput.trim() }) })
       const data = await res.json()
-      if (!res.ok) {
-        setByokError(data.error ?? 'Failed to save key.')
-      } else {
-        setByokSuccess(true)
-        setOpenAiInput('')
-        await fetchSettings() // refresh mask
-        setTimeout(() => setByokSuccess(false), 3000)
-      }
-    } catch {
-      setByokError('Network error — please try again.')
-    } finally {
-      setByokSaving(false)
-    }
+      if (!res.ok) { setByokError(data.error ?? 'Failed to save key.') }
+      else { setByokSuccess(true); setOpenAiInput(''); fetchSettings(); setTimeout(() => setByokSuccess(false), 3000) }
+    } catch { setByokError('Network error — please try again.') }
+    finally { setByokSaving(false) }
   }
 
   const removeByok = async () => {
-    if (!confirm('Remove your Provider API key? Requests will stop working until you add a new one.')) return
-    await fetch('/api/settings', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ removeOpenAiKey: true }),
-    })
-    await fetchSettings()
+    if (!confirm('Remove your provider API key?')) return
+    await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeOpenAiKey: true }) })
+    fetchSettings()
   }
 
-  const saveFlags = async (patch: { enableV2Routing?: boolean; enableV2Why?: boolean }) => {
-    setFlagSaving(true)
+  const saveBudget = async () => {
+    setBudgetSaving(true); setBudgetSuccess(false)
     try {
-      await fetch('/api/settings', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      })
-    } catch { /* non-critical */ } finally {
-      setFlagSaving(false)
-    }
+      await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dailyLimitUsd: parseFloat(dailyLimitInput) }) })
+      setBudgetSuccess(true); fetchSettings(); setTimeout(() => setBudgetSuccess(false), 3000)
+    } finally { setBudgetSaving(false) }
   }
 
-  // ── Derived ─────────────────────────────────────────────────────────
+  const saveFlag = async (patch: { enableV2Routing?: boolean; enableV2Why?: boolean }) => {
+    setFlagSaving(true)
+    try { await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }) }
+    finally { setFlagSaving(false) }
+  }
 
-  const isOwner    = settings?.role === 'owner' || settings?.email === 'yuvrajsingh2351@gmail.com'
+  // ── Derived ────────────────────────────────────────────────────────────
+  const isOwner    = settings?.role === 'owner'
   const plan       = settings?.plan ?? 'free'
   const planConfig = settings?.planConfig
   const requestsToday = settings?.requestsToday ?? 0
-  const dailyLimit = planConfig?.requestsPerDay ?? 50
-  const usagePct   = dailyLimit === -1 ? 0 : Math.min(Math.round((requestsToday / dailyLimit) * 100), 100)
-  const nearLimit  = !isOwner && usagePct >= 80
+  const dailyLimit    = planConfig?.requestsPerDay ?? 50
+  const usagePct      = dailyLimit === -1 ? 0 : Math.min(Math.round((requestsToday / dailyLimit) * 100), 100)
+  const baseUrl       = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')
 
-  // Dynamic proxy base URL — uses env var in production, window.location.origin locally
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')
+  const PLAN_PRICES: Record<string, string> = {
+    free: 'Free', pro: '$29/mo', pro_trial: 'Trial', scale: '$99/mo',
+  }
 
-  // ── Render ───────────────────────────────────────────────────────────
+  if (settingsLoading) return (
+    <div className="flex items-center justify-center h-64">
+      <div className="w-4 h-4 rounded-full border-2 animate-spin" style={{ borderColor: 'var(--primary)', borderTopColor: 'transparent' }} />
+    </div>
+  )
 
   return (
-    <div className="max-w-3xl mx-auto space-y-8">
+    <div className="max-w-2xl space-y-6">
+      {/* Header */}
+      <div>
+        <h1 className="text-xl font-semibold" style={{ color: 'var(--foreground)' }}>Settings</h1>
+        <p className="text-sm mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
+          Manage your API keys, provider key, and feature flags.
+        </p>
+      </div>
 
-      {/* Page header */}
-      <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-3xl font-bold tracking-tight flex items-center gap-3">
-          <Settings className="w-7 h-7 text-primary" />
-          Settings
-        </h1>
-        <p className="text-muted-foreground text-sm mt-1">Manage your API keys, OpenAI key, plan, and advanced features.</p>
-      </motion.div>
-
-      {/* ── UPGRADE BANNER — hidden for owner ─────────────────────────── */}
+      {/* ── New Key Banner ── */}
       <AnimatePresence>
-        {showUpgradeBanner && !isOwner && plan === 'free' && (
-          <motion.div
-            initial={{ opacity: 0, y: -8, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="relative bg-gradient-to-r from-primary/10 to-blue-900/20 border border-primary/20 rounded-2xl p-5 overflow-hidden"
-          >
-            <div className="absolute inset-0 bg-gradient-to-r from-primary/5 to-transparent pointer-events-none" />
-            <button
-              onClick={() => setShowUpgradeBanner(false)}
-              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center flex-shrink-0">
-                <TrendingUp className="w-5 h-5 text-primary" />
-              </div>
-              <div>
-                <p className="font-semibold text-foreground mb-1">
-                  You're approaching your Free plan limit
-                </p>
-                <p className="text-sm text-muted-foreground mb-3">
-                  Upgrade to Pro for 2,000 requests/day, V2 routing, and shadow analytics.
-                </p>
-                <a
-                  href="mailto:upgrade@getvela.ai?subject=Upgrade%20to%20Pro"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-xl text-xs font-semibold transition shadow-[0_0_12px_rgba(16,185,129,0.25)]"
-                >
-                  <Zap className="w-3.5 h-3.5" />
-                  Upgrade to Pro — $29/mo
-                </a>
-              </div>
+        {newKey && (
+          <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="card p-4" style={{ borderColor: 'rgba(16,185,129,0.3)', background: 'var(--accent-muted)' }}>
+            <p className="text-xs font-semibold mb-2" style={{ color: 'var(--accent)' }}>
+              ✓ Key created — copy it now, it won't be shown again
+            </p>
+            <div className="flex items-center gap-2 rounded px-3 py-2" style={{ background: 'var(--secondary)' }}>
+              <code className="text-xs font-mono flex-1 break-all" style={{ color: 'var(--foreground)' }}>{newKey}</code>
+              <CopyBtn text={newKey} />
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* New Vela key alert */}
-      {newKey && (
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="bg-primary/5 border border-primary/20 rounded-2xl p-5"
-        >
-          <p className="text-sm font-semibold text-primary mb-2">✓ Key created — copy it now, it won't be shown again.</p>
-          <div className="flex items-center gap-2 bg-secondary rounded-xl px-4 py-2.5">
-            <code className="text-xs font-mono text-foreground flex-1 break-all">{newKey}</code>
-            <CopyButton text={newKey} />
-          </div>
-        </motion.div>
-      )}
-
-      {/* ── PLAN CARD ─────────────────────────────────────────────────── */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="glass-card overflow-hidden"
-      >
-        <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/20">
+      {/* ── Plan & Usage ── */}
+      <div className="card overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
           <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-muted-foreground" />
-            <h2 className="font-semibold text-foreground text-sm">Plan & Usage</h2>
+            <Shield className="w-4 h-4" style={{ color: 'var(--muted-foreground)' }} />
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--foreground)' }}>Plan &amp; Usage</h2>
           </div>
-          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${PLAN_COLORS[plan]}`}>
-            {planConfig?.name ?? 'Free'}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className={`badge ${plan === 'free' ? 'badge-gray' : plan === 'pro' ? 'badge-blue' : plan === 'pro_trial' ? 'badge-purple' : 'badge-green'}`}>
+              {planConfig?.name ?? 'Free'}
+            </span>
+            <span className="text-xs" style={{ color: 'var(--muted-foreground)' }}>{PLAN_PRICES[plan] ?? 'Free'}</span>
+          </div>
         </div>
 
-        <div className="px-6 py-5 space-y-4">
-          {settingsLoading ? (
-            <div className="h-16 flex items-center">
-              <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        <div className="p-4 space-y-4">
+          {/* Usage bar */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs" style={{ color: 'var(--muted-foreground)' }}>Requests today</span>
+              <span className="text-xs font-mono tabular" style={{ color: usagePct >= 80 ? 'var(--warning)' : 'var(--foreground)' }}>
+                {requestsToday} / {dailyLimit === -1 ? '∞' : dailyLimit}
+              </span>
             </div>
-          ) : (
-            <>
-              {/* Request usage bar */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    Requests Today
-                  </span>
-                  <span className={`text-xs font-bold tabular-nums ${nearLimit ? 'text-amber-400' : 'text-foreground'}`}>
-                    {requestsToday.toLocaleString()} / {dailyLimit === -1 ? '∞' : dailyLimit.toLocaleString()}
-                  </span>
-                </div>
-                <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${usagePct}%` }}
-                    transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-                    className={`h-full rounded-full ${nearLimit ? 'bg-amber-400' : 'bg-primary'}`}
-                  />
-                </div>
-                {nearLimit && (
-                  <p className="text-xs text-amber-400 mt-1.5 flex items-center gap-1">
-                    <AlertTriangle className="w-3 h-3" />
-                    {usagePct}% of daily limit used — consider upgrading
-                  </p>
-                )}
+            <div className="progress-track h-1.5">
+              <motion.div className="progress-fill h-1.5"
+                initial={{ width: 0 }} animate={{ width: `${usagePct}%` }}
+                style={{ background: usagePct >= 80 ? 'var(--warning)' : 'var(--primary)' }} />
+            </div>
+            {usagePct >= 80 && (
+              <p className="text-xs mt-1 flex items-center gap-1" style={{ color: 'var(--warning)' }}>
+                <AlertTriangle className="w-3 h-3" /> {usagePct}% of daily limit used
+              </p>
+            )}
+          </div>
+
+          {/* Daily budget limit */}
+          <div>
+            <label className="section-title block mb-1.5">Daily Spend Limit (USD)</label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm" style={{ color: 'var(--muted-foreground)' }}>$</span>
+                <input
+                  className="input pl-6"
+                  type="number" min="1" step="1"
+                  value={dailyLimitInput}
+                  onChange={e => setDailyLimitInput(e.target.value)}
+                />
               </div>
+              <button onClick={saveBudget} disabled={budgetSaving}
+                className="btn btn-secondary btn-sm" style={{ opacity: budgetSaving ? 0.6 : 1 }}>
+                {budgetSaving ? 'Saving…' : budgetSuccess ? '✓ Saved' : 'Save'}
+              </button>
+            </div>
+            <p className="text-xs mt-1" style={{ color: 'var(--muted-foreground)' }}>
+              Autopilot blocks new requests when this limit is reached.
+            </p>
+          </div>
 
-              {/* Plan features */}
-              {planConfig && (
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  {[
-                    { label: 'Daily Budget Cap', value: `$${planConfig.dailyBudgetCapUsd}` },
-                    { label: 'V2 Routing',       value: planConfig.v2RoutingAllowed ? '✓ Included' : '✗ Pro+' },
-                    { label: 'Shadow Analytics', value: planConfig.shadowAnalytics   ? '✓ Included' : '✗ Pro+' },
-                    { label: 'Support',          value: planConfig.supportLevel },
-                  ].map(f => (
-                    <div key={f.label} className="bg-secondary/40 rounded-xl px-3 py-2.5">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">{f.label}</p>
-                      <p className={`text-xs font-semibold ${f.value.startsWith('✓') ? 'text-primary' : f.value.startsWith('✗') ? 'text-muted-foreground' : 'text-foreground'}`}>
-                        {f.value}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!isOwner && plan !== 'scale' && (
-                <a
-                  href="/pricing"
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:text-primary/80 transition"
-                >
-                  <Zap className="w-3.5 h-3.5" />
-                  {plan === 'free' || plan === 'pro_trial' ? 'Upgrade to Pro — ₹2,499/mo →' : 'Upgrade to Scale — ₹9,999/mo →'}
-                </a>
-              )}
-            </>
+          {/* Upgrade CTA */}
+          {!isOwner && plan !== 'scale' && (
+            <a href="/pricing" className="flex items-center gap-2 text-xs font-medium" style={{ color: 'var(--primary)' }}>
+              <Zap className="w-3.5 h-3.5" />
+              {plan === 'free' || plan === 'pro_trial' ? 'Upgrade to Pro — $29/mo' : 'Upgrade to Scale — $99/mo'} →
+            </a>
           )}
         </div>
-      </motion.div>
+      </div>
 
-      {/* ── BYOK SECTION ──────────────────────────────────────────────── */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.05 }}
-        className="glass-card overflow-hidden"
-      >
-        <div className="px-6 py-4 border-b border-border flex items-center gap-2 bg-secondary/20">
-          <Shield className="w-4 h-4 text-muted-foreground" />
-          <h2 className="font-semibold text-foreground text-sm">Provider API Key (BYOK)</h2>
-          <span className="text-[10px] font-semibold bg-primary/10 text-primary px-2 py-0.5 rounded-full uppercase tracking-wider ml-auto">
+      {/* ── Provider API Key (BYOK) ── */}
+      <div className="card overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4" style={{ color: 'var(--muted-foreground)' }} />
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--foreground)' }}>Provider API Key (BYOK)</h2>
+          </div>
+          <span className={`badge ${settings?.hasApiKey ? 'badge-green' : 'badge-amber'}`}>
             {settings?.hasApiKey ? 'Configured' : 'Required'}
           </span>
         </div>
 
-        <div className="px-6 py-5 space-y-4">
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            Vela uses your provider key to make API calls on your behalf. Supports OpenAI (sk-...) and Claude (sk-ant-...).
+        <div className="p-4 space-y-3">
+          <p className="text-xs" style={{ color: 'var(--muted-foreground)' }}>
+            Your OpenAI or Claude key. Vela uses it to make API calls on your behalf. Encrypted with AES-256-GCM.
           </p>
 
-          {/* Current key display */}
           {settings?.hasApiKey && settings?.keyMask && (
-            <div className="flex items-center gap-3 bg-secondary/40 border border-border/50 rounded-xl px-4 py-3">
-              <ShieldCheck className="w-4 h-4 text-primary flex-shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5 flex items-center gap-2">
-                  Current Key
-                  {settings.provider && (
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${settings.provider === 'claude' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30 glow-blue' : 'bg-primary/20 text-primary border border-primary/30 glow-green'}`}>
-                      Detected Provider: {settings.provider === 'claude' ? 'Claude' : 'OpenAI'}
-                    </span>
-                  )}
+            <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg" style={{ background: 'var(--secondary)' }}>
+              <ShieldCheck className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--accent)' }} />
+              <div className="flex-1">
+                <p className="text-xs" style={{ color: 'var(--muted-foreground)' }}>
+                  Current key{settings.provider && ` · ${settings.provider === 'claude' ? 'Claude' : 'OpenAI'}`}
                 </p>
-                <code className="text-xs font-mono text-foreground">{settings.keyMask}</code>
+                <code className="text-xs font-mono" style={{ color: 'var(--foreground)' }}>{settings.keyMask}</code>
               </div>
-              <button
-                onClick={removeByok}
-                className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition"
-                title="Remove key"
-              >
+              <button onClick={removeByok} className="btn btn-ghost btn-sm p-1.5" style={{ color: 'var(--destructive)' }}>
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
 
-          {/* Key input */}
-          <div className="space-y-2">
-            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">
-              {settings?.hasApiKey ? 'Replace Key' : 'Add Key'}
-            </label>
-            <div className="relative flex items-center">
+          <div>
+            <label className="section-title block mb-1.5">{settings?.hasApiKey ? 'Replace Key' : 'Add Key'}</label>
+            <div className="relative">
               <input
-                ref={inputRef}
-                id="openai-key-input"
                 type={showKey ? 'text' : 'password'}
+                className="input pr-10 font-mono"
+                placeholder="sk-proj-…"
                 value={openAiInput}
                 onChange={e => { setOpenAiInput(e.target.value); setByokError('') }}
-                placeholder="sk-proj-..."
-                className="w-full bg-secondary border border-border text-foreground rounded-xl px-4 py-2.5 pr-10 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary/30 transition placeholder:text-muted-foreground font-mono"
               />
-              <button
-                type="button"
-                onClick={() => setShowKey(s => !s)}
-                className="absolute right-3 text-muted-foreground hover:text-foreground transition"
-              >
+              <button type="button" onClick={() => setShowKey(s => !s)}
+                className="absolute right-3 top-1/2 -translate-y-1/2"
+                style={{ color: 'var(--muted-foreground)' }}>
                 {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-
-            {byokError && (
-              <p className="text-xs text-destructive flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3" />
-                {byokError}
-              </p>
-            )}
-
-            {byokSuccess && (
-              <p className="text-xs text-primary flex items-center gap-1">
-                <Check className="w-3 h-3" />
-                API key saved and encrypted successfully.
-              </p>
-            )}
-
-            <button
-              id="save-openai-key"
-              onClick={saveByok}
-              disabled={byokSaving || openAiInput.trim().length < 20}
-              className="flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-xl text-xs font-semibold transition disabled:opacity-40 shadow-[0_0_12px_rgba(16,185,129,0.2)]"
-            >
-              {byokSaving ? (
-                <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
-              ) : (
-                <><ShieldCheck className="w-3.5 h-3.5" /> Save Key</>
-              )}
+            {byokError   && <p className="text-xs mt-1 flex items-center gap-1" style={{ color: 'var(--destructive)' }}><AlertTriangle className="w-3 h-3" />{byokError}</p>}
+            {byokSuccess && <p className="text-xs mt-1" style={{ color: 'var(--accent)' }}>✓ Key saved securely</p>}
+            <button onClick={saveByok} disabled={byokSaving || openAiInput.trim().length < 20}
+              className="btn btn-primary btn-sm mt-2" style={{ opacity: byokSaving || openAiInput.trim().length < 20 ? 0.6 : 1 }}>
+              <ShieldCheck className="w-3.5 h-3.5" />
+              {byokSaving ? 'Saving…' : 'Save Key'}
             </button>
           </div>
-
-          <div className="flex items-start gap-2 bg-secondary/30 rounded-xl px-3 py-2.5 border border-border/30">
-            <Shield className="w-3.5 h-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
-            <p className="text-[10px] text-muted-foreground leading-relaxed">
-              Encrypted with AES-256-GCM using a server-only key. We never log, transmit, or store your key in plaintext. You can remove it at any time.
-            </p>
-          </div>
         </div>
-      </motion.div>
+      </div>
 
-      {/* ── VELA API KEYS ─────────────────────────────────────────────── */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="glass-card overflow-hidden"
-      >
-        <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/20">
+      {/* ── Vela API Keys ── */}
+      <div className="card overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
           <div className="flex items-center gap-2">
-            <Key className="w-4 h-4 text-muted-foreground" />
-            <h2 className="font-semibold text-foreground text-sm">Vela API Keys</h2>
-            <span className="text-xs text-muted-foreground">({keys.length})</span>
+            <Key className="w-4 h-4" style={{ color: 'var(--muted-foreground)' }} />
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--foreground)' }}>Vela API Keys</h2>
+            <span className="badge badge-gray">{keys.length}</span>
           </div>
-          <button
-            onClick={createKey}
-            disabled={keysLoading}
-            className="flex items-center gap-1.5 px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-xl text-xs font-semibold transition disabled:opacity-50 shadow-[0_0_12px_rgba(16,185,129,0.25)]"
-          >
+          <button onClick={createKey} disabled={keysLoading} className="btn btn-primary btn-sm">
             <Plus className="w-3.5 h-3.5" />
-            {keysLoading ? 'Generating...' : 'New Key'}
+            {keysLoading ? 'Generating…' : 'New Key'}
           </button>
         </div>
 
-        <div className="px-6 py-3 border-b border-border bg-secondary/5">
-          <p className="text-xs text-muted-foreground">
-            This key is used to send requests through Vela proxy. Not your OpenAI key.
-          </p>
-        </div>
-
         {/* Proxy endpoint */}
-        <div className="px-6 py-4 bg-secondary/10 border-b border-border">
-          <p className="text-xs text-muted-foreground mb-2 font-semibold uppercase tracking-wider">Proxy Endpoint</p>
-          <div className="flex items-center gap-2 bg-secondary rounded-xl px-4 py-2.5">
-            <code className="text-xs font-mono text-primary flex-1">{baseUrl}/api/v1/chat/completions</code>
-            <CopyButton text={`${baseUrl}/api/v1/chat/completions`} />
+        <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+          <p className="section-title mb-1">Proxy Endpoint</p>
+          <div className="flex items-center gap-2 px-3 py-2 rounded" style={{ background: 'var(--secondary)' }}>
+            <code className="text-xs font-mono flex-1" style={{ color: 'var(--primary)' }}>{baseUrl}/api/v1/chat/completions</code>
+            <CopyBtn text={`${baseUrl}/api/v1/chat/completions`} />
           </div>
         </div>
 
-        <div className="divide-y divide-border/50">
-          {keys.map((k, i) => (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: i * 0.05 }}
-              key={k.id}
-              className="px-6 py-4 flex items-center justify-between hover:bg-secondary/20 transition"
-            >
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-sm font-medium text-foreground">{k.label || 'API Key'}</span>
-                  <span className="text-[10px] font-semibold bg-primary/10 text-primary px-2 py-0.5 rounded-full uppercase tracking-wider">Active</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <code className="text-xs font-mono text-muted-foreground bg-secondary px-2 py-0.5 rounded">{k.keyPrefix}••••••••••••••</code>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">Created {new Date(k.createdAt).toLocaleDateString()}</p>
-              </div>
-              <button
-                onClick={() => revokeKey(k.id)}
-                className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl transition"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </motion.div>
-          ))}
-          {keys.length === 0 && (
-            <div className="px-6 py-10 text-center text-muted-foreground">
-              <Key className="w-6 h-6 mx-auto mb-2 opacity-20" />
-              <p className="text-sm">No API keys yet. Create one above.</p>
-            </div>
-          )}
-        </div>
-      </motion.div>
-
-      {/* ── INTEGRATION SNIPPET ───────────────────────────────────────── */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
-        className="glass-card p-6"
-      >
-        <h2 className="font-semibold text-foreground text-sm mb-4">Quick Integration</h2>
-        <div className="bg-secondary rounded-xl p-4 overflow-x-auto">
-          <pre className="text-xs text-muted-foreground font-mono leading-relaxed">
-{`import OpenAI from 'openai'
-
-const client = new OpenAI({
-  apiKey: 'vk_live_YOUR_KEY',
-  baseURL: '${baseUrl}/api/v1'
+        {/* Integration snippet */}
+        <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+          <p className="section-title mb-1">Quick Integration</p>
+          <pre className="text-xs p-3 rounded overflow-x-auto leading-relaxed" style={{ background: 'var(--secondary)', color: 'var(--secondary-foreground)' }}>
+{`const openai = new OpenAI({
+  apiKey:  'vk_live_YOUR_KEY',
+  baseURL: '${baseUrl}/api/v1',
 })
-
-const response = await client.chat.completions.create({
-  model: 'vela-mini',   // or 'vela-pro'
-  messages: [{ role: 'user', content: 'Hello!' }]
-})`}
+// Optionally tag for attribution:
+// body: { customer_id: 'acme', feature_id: 'search' }`}
           </pre>
         </div>
-      </motion.div>
 
-      {/* ── V2 FEATURES ───────────────────────────────────────────────── */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-        className="glass-card overflow-hidden"
-      >
-        <div className="px-6 py-4 border-b border-border flex items-center gap-2 bg-secondary/20">
-          <FlaskConical className="w-4 h-4 text-muted-foreground" />
-          <h2 className="font-semibold text-foreground text-sm">V2 Features</h2>
-          {settings?.role !== 'owner' && (
-            <span className="text-[10px] font-semibold bg-amber-900/30 text-amber-400 px-2 py-0.5 rounded-full uppercase tracking-wider">Beta</span>
+        {/* Key list */}
+        <div>
+          {keys.length === 0 ? (
+            <div className="empty-state">
+              <Key className="w-6 h-6 mb-2" style={{ color: 'var(--muted-foreground)' }} />
+              <p className="text-sm" style={{ color: 'var(--muted-foreground)' }}>No keys yet. Create one above.</p>
+            </div>
+          ) : (
+            keys.map((k, i) => (
+              <div key={k.id} className="flex items-center justify-between px-4 py-3 card-hover"
+                style={{ borderBottom: i < keys.length - 1 ? '1px solid var(--border-subtle)' : 'none' }}>
+                <div>
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>{k.label || 'API Key'}</span>
+                    <span className="badge badge-green">Active</span>
+                  </div>
+                  <code className="text-xs font-mono" style={{ color: 'var(--muted-foreground)' }}>{k.keyPrefix}••••••••••</code>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
+                    Created {new Date(k.createdAt).toLocaleDateString()}
+                    {k.lastUsedAt && ` · Last used ${new Date(k.lastUsedAt).toLocaleDateString()}`}
+                  </p>
+                </div>
+                <button onClick={() => revokeKey(k.id)} className="btn btn-ghost btn-sm p-1.5" style={{ color: 'var(--destructive)' }}>
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))
           )}
         </div>
+      </div>
 
-        <div className="divide-y divide-border/50">
-          {/* V2 Routing toggle */}
-          <div className="px-6 py-5 flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <Zap className="w-4 h-4 text-primary" />
-                <span className="text-sm font-medium text-foreground">V2 Routing</span>
-                {!settings?.planConfig?.v2RoutingAllowed && (
-                  <span className="text-[10px] bg-secondary text-muted-foreground px-1.5 py-0.5 rounded font-semibold">Pro+</span>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground max-w-sm">
-                5-tier complexity scoring for more precise model selection.
-              </p>
-            </div>
-            <Toggle
-              id="toggle-v2-routing"
-              checked={v2Routing}
-              disabled={flagSaving || !settings?.planConfig?.v2RoutingAllowed}
-              onChange={next => { setV2Routing(next); saveFlags({ enableV2Routing: next }) }}
-            />
-          </div>
-
-          {/* V2 WHY toggle */}
-          <div className="px-6 py-5 flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <Zap className="w-4 h-4 text-primary" />
-                <span className="text-sm font-medium text-foreground">Personalized WHY Explanations</span>
-              </div>
-              <p className="text-xs text-muted-foreground max-w-sm">
-                WHY explanations reference your personal usage history.
-              </p>
-            </div>
-            <Toggle
-              id="toggle-v2-why"
-              checked={v2Why}
-              disabled={flagSaving}
-              onChange={next => { setV2Why(next); saveFlags({ enableV2Why: next }) }}
-            />
-          </div>
+      {/* ── V2 Features ── */}
+      <div className="card overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3" style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+          <FlaskConical className="w-4 h-4" style={{ color: 'var(--muted-foreground)' }} />
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--foreground)' }}>Advanced Features</h2>
+          <span className="badge badge-amber ml-auto">Beta</span>
         </div>
-      </motion.div>
+
+        <div>
+          {[
+            {
+              id:       'v2-routing',
+              icon:     Zap,
+              label:    'V2 Routing',
+              desc:     '5-tier complexity scoring for more precise model selection.',
+              locked:   !planConfig?.v2RoutingAllowed,
+              lockedMsg: 'Requires Pro plan',
+              checked:  v2Routing,
+              onChange: (v: boolean) => { setV2Routing(v); saveFlag({ enableV2Routing: v }) },
+            },
+            {
+              id:       'v2-why',
+              icon:     Zap,
+              label:    'Personalized WHY',
+              desc:     'WHY explanations reference your personal usage history.',
+              locked:   false,
+              checked:  v2Why,
+              onChange: (v: boolean) => { setV2Why(v); saveFlag({ enableV2Why: v }) },
+            },
+          ].map(f => (
+            <div key={f.id} className="flex items-center gap-4 px-4 py-4"
+              style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>{f.label}</span>
+                  {f.locked && <span className="badge badge-gray">{f.lockedMsg}</span>}
+                </div>
+                <p className="text-xs" style={{ color: 'var(--muted-foreground)' }}>{f.desc}</p>
+              </div>
+              <Toggle checked={f.checked} onChange={f.onChange} disabled={flagSaving || f.locked} />
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

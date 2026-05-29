@@ -2,66 +2,89 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, ListTree, Settings, Zap, LogOut, ShieldCheck, AlertTriangle } from 'lucide-react'
-import { createBrowserSupabase } from '@/lib/supabase-browser'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import {
+  LayoutDashboard,
+  TrendingUp,
+  Wallet,
+  Shield,
+  Bell,
+  GitBranch,
+  Zap,
+  Settings,
+  LogOut,
+  ChevronDown,
+  AlertTriangle,
+  Users,
+  BarChart3,
+} from 'lucide-react'
 
-const nav = [
-  { href: '/dashboard',  label: 'Dashboard',  icon: LayoutDashboard },
-  { href: '/decisions',  label: 'Decisions',   icon: ListTree },
-  { href: '/settings',   label: 'Settings',    icon: Settings },
+const NAV = [
+  { group: 'Overview',
+    items: [
+      { href: '/dashboard',    label: 'Overview',     icon: LayoutDashboard },
+    ],
+  },
+  { group: 'Spend',
+    items: [
+      { href: '/spend',        label: 'Spend',        icon: TrendingUp },
+      { href: '/attribution',  label: 'Attribution',  icon: GitBranch },
+    ],
+  },
+  { group: 'Control',
+    items: [
+      { href: '/budgets',      label: 'Budgets',      icon: Wallet },
+      { href: '/governance',   label: 'Governance',   icon: Shield },
+      { href: '/alerts',       label: 'Alerts',       icon: Bell },
+    ],
+  },
+  { group: 'Intelligence',
+    items: [
+      { href: '/roi',          label: 'ROI',          icon: BarChart3 },
+      { href: '/why',          label: 'WHY Engine',   icon: Zap },
+    ],
+  },
+  { group: 'Account',
+    items: [
+      { href: '/settings',     label: 'Settings',     icon: Settings },
+    ],
+  },
 ]
 
-const PLAN_LABELS: Record<string, string> = {
-  free:      'Free',
-  pro:       'Pro',
-  pro_trial: 'Pro Trial',
-  scale:     'Scale',
-}
-
-const PLAN_COLORS: Record<string, string> = {
-  free:      'text-muted-foreground',
-  pro:       'text-blue-400',
-  pro_trial: 'text-purple-400',
-  scale:     'text-amber-400',
+const PLAN_BADGE: Record<string, { label: string; cls: string }> = {
+  free:      { label: 'Free',       cls: 'badge-gray'   },
+  pro:       { label: 'Pro',        cls: 'badge-blue'   },
+  pro_trial: { label: 'Trial',      cls: 'badge-purple' },
+  scale:     { label: 'Scale',      cls: 'badge-green'  },
 }
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router   = useRouter()
 
-  // Live sidebar status — fetched once from /api/settings
-  const [sidebarStatus, setSidebarStatus] = useState<{
-    plan: string
-    hasApiKey: boolean
-    requestsToday: number
-    dailyLimit: number
-    usagePct: number
+  const [status, setStatus] = useState<{
+    plan: string; hasApiKey: boolean; requestsToday: number;
+    dailyLimit: number; usagePct: number; email?: string; role?: string;
   } | null>(null)
+
+  const [collapsed, setCollapsed] = useState(false)
 
   useEffect(() => {
     fetch('/api/settings')
       .then(r => {
-        if (r.status === 401) {
-          router.push('/login')
-          return null
-        }
+        if (r.status === 401) { router.push('/login'); return null }
         return r.ok ? r.json() : null
       })
       .then(d => {
         if (!d) return
         const limit    = d.planConfig?.requestsPerDay ?? 50
         const usagePct = limit === -1 ? 0 : Math.min(Math.round((d.requestsToday / limit) * 100), 100)
-        setSidebarStatus({
-          plan:          d.plan ?? 'free',
-          hasApiKey:     d.hasApiKey ?? false,
-          requestsToday: d.requestsToday ?? 0,
-          dailyLimit:    limit,
-          usagePct,
-        })
+        setStatus({ plan: d.plan ?? 'free', hasApiKey: d.hasApiKey ?? false,
+          requestsToday: d.requestsToday ?? 0, dailyLimit: limit, usagePct, email: d.email, role: d.role })
       })
-      .catch(() => { /* sidebar status is non-critical */ })
+      .catch(() => {})
   }, [])
 
   const handleSignOut = async () => {
@@ -69,117 +92,142 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     router.push('/')
   }
 
+  const isAdmin = status?.role === 'owner'
+  const planBadge = PLAN_BADGE[status?.plan ?? 'free'] ?? PLAN_BADGE.free
+
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      {/* Sidebar */}
-      <aside className="w-60 flex-shrink-0 border-r border-border flex flex-col bg-card">
+    <div className="flex h-screen overflow-hidden" style={{ background: 'var(--background)' }}>
+      {/* ── Sidebar ── */}
+      <aside className={`${collapsed ? 'w-14' : 'w-56'} flex-shrink-0 flex flex-col transition-all duration-200`}
+        style={{ background: 'var(--card)', borderRight: '1px solid var(--border)' }}>
+
         {/* Logo */}
-        <div className="h-16 flex items-center px-5 border-b border-border">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-primary flex items-center justify-center shadow-[0_0_12px_rgba(16,185,129,0.4)]">
-              <Zap className="w-4 h-4 text-white" strokeWidth={2.5} />
-            </div>
-            <span className="font-bold text-lg tracking-tight text-foreground">Vela</span>
+        <div className="h-14 flex items-center px-4 gap-2.5 flex-shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="w-6 h-6 rounded flex items-center justify-center flex-shrink-0" style={{ background: 'var(--primary)' }}>
+            <Zap className="w-3.5 h-3.5 text-white" strokeWidth={2.5} />
           </div>
+          {!collapsed && (
+            <span className="font-semibold text-sm tracking-tight" style={{ color: 'var(--foreground)' }}>Vela</span>
+          )}
+          <button
+            onClick={() => setCollapsed(c => !c)}
+            className="ml-auto p-1 rounded transition-colors"
+            style={{ color: 'var(--muted-foreground)' }}
+          >
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${collapsed ? '-rotate-90' : 'rotate-90'}`} />
+          </button>
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 p-3 space-y-0.5">
-          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 py-2 mt-1">Main</p>
-          {nav.map(({ href, label, icon: Icon }) => {
-            const active = pathname === href
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 ${
-                  active
-                    ? 'bg-primary/10 text-primary shadow-[0_0_0_1px_rgba(16,185,129,0.2)]'
-                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-                }`}
-              >
-                <Icon className="w-4 h-4 flex-shrink-0" />
-                {label}
+        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
+          {NAV.map(group => (
+            <div key={group.group}>
+              {!collapsed && (
+                <p className="section-title px-2 mb-1">{group.group}</p>
+              )}
+              {group.items.map(({ href, label, icon: Icon }) => {
+                const active = pathname === href || pathname.startsWith(href + '/')
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={`nav-link ${active ? 'active' : ''}`}
+                    title={collapsed ? label : undefined}
+                  >
+                    <Icon className="w-4 h-4 flex-shrink-0" />
+                    {!collapsed && <span>{label}</span>}
+                    {!collapsed && active && (
+                      <span className="ml-auto w-1.5 h-1.5 rounded-full" style={{ background: 'var(--primary)' }} />
+                    )}
+                  </Link>
+                )
+              })}
+            </div>
+          ))}
+
+          {isAdmin && (
+            <div>
+              {!collapsed && <p className="section-title px-2 mb-1">Admin</p>}
+              <Link href="/admin" className={`nav-link ${pathname === '/admin' ? 'active' : ''}`} title={collapsed ? 'Admin' : undefined}>
+                <Users className="w-4 h-4 flex-shrink-0" />
+                {!collapsed && <span>Admin Panel</span>}
               </Link>
-            )
-          })}
+            </div>
+          )}
         </nav>
 
         {/* Footer */}
-        <div className="p-3 border-t border-border space-y-2">
-
-          {/* BYOK warning — shown when no OpenAI key */}
-          {sidebarStatus && !sidebarStatus.hasApiKey && (
-            <Link
-              href="/settings"
-              className="flex items-start gap-2 bg-amber-900/20 border border-amber-900/40 rounded-xl px-3 py-2.5 hover:bg-amber-900/30 transition"
-            >
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 mt-0.5 flex-shrink-0" />
-              <div>
-                <p className="text-[10px] font-semibold text-amber-400 uppercase tracking-widest">Key Required</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Add your OpenAI key in Settings</p>
-              </div>
+        <div className="p-2 flex-shrink-0 space-y-1" style={{ borderTop: '1px solid var(--border)' }}>
+          {/* BYOK warning */}
+          {status && !status.hasApiKey && !collapsed && (
+            <Link href="/settings" className="flex items-center gap-2 px-2 py-2 rounded text-xs transition-colors"
+              style={{ background: 'var(--warning-muted)', color: 'var(--warning)' }}>
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+              <span>Add API Key</span>
             </Link>
           )}
 
-          {/* Autopilot status / plan info */}
-          {sidebarStatus ? (
-            <div className="bg-primary/5 border border-primary/10 rounded-xl px-3 py-2.5">
+          {/* Plan + usage */}
+          {status && !collapsed && (
+            <div className="px-2 py-2 rounded" style={{ background: 'var(--secondary)' }}>
               <div className="flex items-center justify-between mb-1">
-                <div className="flex items-center gap-1.5">
-                  <ShieldCheck className="w-3 h-3 text-primary" />
-                  <p className="text-[10px] font-semibold text-primary uppercase tracking-widest">
-                    {sidebarStatus.hasApiKey ? 'Autopilot Active' : 'Autopilot Paused'}
-                  </p>
-                </div>
-                <span className={`text-[10px] font-bold uppercase tracking-wider ${PLAN_COLORS[sidebarStatus.plan] ?? 'text-muted-foreground'}`}>
-                  {PLAN_LABELS[sidebarStatus.plan] ?? sidebarStatus.plan}
+                <span className="text-xs" style={{ color: 'var(--muted-foreground)' }}>
+                  {status.email?.split('@')[0] ?? 'Account'}
                 </span>
+                <span className={`badge ${planBadge.cls}`}>{planBadge.label}</span>
               </div>
-              {/* Usage mini-bar */}
-              {sidebarStatus.dailyLimit !== -1 && (
+              {status.dailyLimit !== -1 && (
                 <>
-                  <div className="h-1 bg-secondary rounded-full overflow-hidden mt-1.5">
-                    <div
-                      className={`h-full rounded-full transition-all ${sidebarStatus.usagePct >= 80 ? 'bg-amber-400' : 'bg-primary'}`}
-                      style={{ width: `${sidebarStatus.usagePct}%` }}
-                    />
+                  <div className="progress-track h-1 mt-1">
+                    <div className="progress-fill h-1"
+                      style={{ width: `${status.usagePct}%`, background: status.usagePct >= 80 ? 'var(--warning)' : 'var(--primary)' }} />
                   </div>
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    {sidebarStatus.requestsToday} / {sidebarStatus.dailyLimit} requests today
+                  <p className="text-xs mt-1" style={{ color: 'var(--muted-foreground)' }}>
+                    {status.requestsToday}/{status.dailyLimit} req today
                   </p>
                 </>
               )}
-              {sidebarStatus.dailyLimit === -1 && (
-                <p className="text-xs text-muted-foreground mt-0.5">Unlimited requests</p>
-              )}
-            </div>
-          ) : (
-            <div className="bg-primary/5 border border-primary/10 rounded-xl px-3 py-2.5">
-              <p className="text-[10px] font-semibold text-primary uppercase tracking-widest">Autopilot Active</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Optimized model selection</p>
             </div>
           )}
 
-          <button
-            onClick={handleSignOut}
-            className="flex items-center gap-2 text-muted-foreground hover:text-foreground text-xs px-3 py-2 rounded-lg hover:bg-secondary transition w-full"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Sign out
+          <button onClick={handleSignOut}
+            className="nav-link w-full" style={{ justifyContent: collapsed ? 'center' : 'flex-start' }}>
+            <LogOut className="w-4 h-4 flex-shrink-0" />
+            {!collapsed && <span>Sign out</span>}
           </button>
         </div>
       </aside>
 
-      {/* Content */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 flex-shrink-0 border-b border-border flex items-center px-8 bg-card/50 backdrop-blur">
-          <p className="text-sm text-muted-foreground">
-            {nav.find(n => n.href === pathname)?.label ?? 'Vela'}
-          </p>
+      {/* ── Main content ── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Topbar */}
+        <header className="h-14 flex-shrink-0 flex items-center px-6 gap-4"
+          style={{ background: 'var(--card)', borderBottom: '1px solid var(--border)' }}>
+          <div className="flex-1">
+            <p className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>
+              {NAV.flatMap(g => g.items).find(n => pathname === n.href || pathname.startsWith(n.href + '/'))?.label ?? 'Vela'}
+            </p>
+          </div>
+          {/* Status dot */}
+          <div className="flex items-center gap-1.5">
+            <span className="dot dot-green dot-pulse" />
+            <span className="text-xs" style={{ color: 'var(--muted-foreground)' }}>Autopilot active</span>
+          </div>
         </header>
-        <main className="flex-1 overflow-y-auto p-8">
-          {children}
+
+        {/* Page content */}
+        <main className="flex-1 overflow-y-auto p-6">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={pathname}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+            >
+              {children}
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
     </div>

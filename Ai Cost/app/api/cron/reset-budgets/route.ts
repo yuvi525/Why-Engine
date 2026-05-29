@@ -20,15 +20,8 @@ export async function POST(req: NextRequest) {
     },
   })
 
-  // Clear Redis budget keys (best effort)
-  try {
-    const keys = await redis.keys('budget:*:today')
-    if (keys.length > 0) {
-      await redis.del(...keys)
-    }
-  } catch (err) {
-    console.error('[cron] Redis cleanup failed:', err)
-  }
+  // Redis keys naturally expire after 24 hours (budget:userId:YYYY-MM-DD TTL is 86400)
+  // No KEYS scan is required, preventing O(N) blocking Redis freezes.
 
   return NextResponse.json({ success: true, resetCount: result.count })
 }

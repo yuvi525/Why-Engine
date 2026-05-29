@@ -16,6 +16,7 @@ import { updateUserContext, getUserContext } from '@/lib/proxy/context'
 import { PLAN_LIMITS, isOverRequestLimit, Plan, resolvePlan, getMonthlyRevenueMicro } from '@/lib/plans'
 import { detectProvider } from '@/lib/providers/detect'
 import { callClaudeAdapter } from '@/lib/providers/claude'
+import { enforceGovernancePolicies, resolveEffectiveDailyLimit } from '@/lib/proxy/governance'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
       { status: 401 }
     )
   }
-  const { userId } = authResult
+  const { userId, keyId: apiKeyId } = authResult
   if (!userId) {
     return NextResponse.json(
       { error: { message: 'Invalid or missing API key', type: 'auth_error', code: 401 } },
@@ -85,6 +86,7 @@ export async function POST(req: NextRequest) {
   const customerId: string | null = typeof body.customer_id === 'string' ? body.customer_id : null
   const featureId:  string | null = typeof body.feature_id  === 'string' ? body.feature_id  : null
   const userTier:   string | null = typeof body.user_tier   === 'string' ? body.user_tier   : null
+  const revenueMicro: number | null = typeof body.revenue_micro === 'number' ? body.revenue_micro : (typeof body.revenueMicro === 'number' ? body.revenueMicro : null)
 
   // ── 4. LOAD USER STATE ───────────────────────────────────────────────
   let user, budgetState
@@ -175,14 +177,59 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const openAiKey = decrypt(user.encryptedApiKey)
+  // ── 4e. GOVERNANCE ENFORCEMENT ────────────────────────────────────────────
+  // Run BEFORE routing so we can report the intended model in the block message.
+  // Governance is evaluated against the ROUTING decision, not the raw request model.
+  // (Governance runs here after plan enforcement but before budget gate for fast rejection)
+  if (!isOwner) {
+    // Quick classify to get routing intent for governance check
+    const govInputTokens = estimateTokens(messages.map((m: any) => m.content ?? '').join('\n'))
+    const govComplexity = classify({ messages, totalInputTokens: govInputTokens })
+    const govModel = govComplexity === 1 ? 'vela-pro' : 'vela-mini'
+
+    const govResult = await enforceGovernancePolicies(userId, govModel)
+    if (govResult.blocked) {
+      return NextResponse.json(
+        {
+          error: {
+            message: govResult.reason ?? 'Request blocked by governance policy',
+            type: 'governance_error',
+            code: 403,
+            policyId:   govResult.policyId,
+            policyName: govResult.policyName,
+          },
+          vela: { requestId, reasonCode: 'GOVERNANCE_BLOCK' },
+        },
+        { status: 403 }
+      )
+    }
+  }
+
+  let openAiKey: string
+  try {
+    openAiKey = decrypt(user.encryptedApiKey)
+  } catch (err) {
+    console.error('[vela] Decryption of API key failed:', err)
+    return NextResponse.json(
+      {
+        error: {
+          message: 'Decryption of configured provider API key failed. Please update/re-save your API key in Settings.',
+          type: 'decryption_error',
+          code: 422,
+        },
+        vela: { requestId, reasonCode: 'DECRYPTION_ERROR' }
+      },
+      { status: 422 }
+    )
+  }
   const provider = detectProvider(openAiKey)
   const providerModelMap = provider === 'claude' ? MODEL_MAP_CLAUDE : MODEL_MAP_OPENAI
 
   // ── 5. BUDGET GATE (synchronous) ─────────────────────────────────────
   let redisSpent = 0
   try {
-    const raw = await redis.hget<number>(`budget:${userId}:today`, 'spentMicro')
+    const todayDateStr = new Date().toISOString().split('T')[0]
+    const raw = await redis.hget<number>(`budget:${userId}:${todayDateStr}`, 'spentMicro')
     redisSpent = raw ?? budgetState.spentTodayMicro
   } catch {
     console.error('[vela] Redis read failed — failing open for budget check')
@@ -212,9 +259,18 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── 5b. CUSTOMER BUDGET RULES ─────────────────────────────────────────────
+  // Override dailyLimitMicro with the smallest customer-defined hard limit if present.
+  const effectiveBudget = isOwner
+    ? { dailyLimitMicro: budgetState.dailyLimitMicro, softLimitPct: 80 }
+    : await resolveEffectiveDailyLimit(userId, budgetState.dailyLimitMicro)
+
+  const effectiveDailyLimitMicro = effectiveBudget.dailyLimitMicro
+  const effectiveAutoDowngradeAt = (effectiveBudget.softLimitPct / 100) || budgetState.autoDowngradeAt
+
   const apAction = autopilot(
-    { spentTodayMicro: redisSpent, dailyLimitMicro: budgetState.dailyLimitMicro, requestsToday: budgetState.requestsToday },
-    { autoDowngradeAt: budgetState.autoDowngradeAt }
+    { spentTodayMicro: redisSpent, dailyLimitMicro: effectiveDailyLimitMicro, requestsToday: budgetState.requestsToday },
+    { autoDowngradeAt: effectiveAutoDowngradeAt }
   )
 
   if (!isOwner && apAction.action === 'REJECT') {
@@ -274,9 +330,10 @@ export async function POST(req: NextRequest) {
       }
       const why = generateWHY('CACHE_HIT', { model: 'cached', ...costResult })
 
-      // Phase 5: Margin for cache hits (cost = 0, revenue = full month)
-      const cacheRevenueMicro = getMonthlyRevenueMicro(userPlan)
-      const cacheMarginMicro = cacheRevenueMicro - 0 // cost is 0 for cache
+      // Phase 5: Margin for cache hits
+      const cacheRevenueMicro = revenueMicro
+      const cacheMarginMicro = cacheRevenueMicro !== null ? cacheRevenueMicro : null
+      const cacheMarginStatus = cacheRevenueMicro !== null ? (cacheMarginMicro! > 0 ? 'profit' : 'break_even') : null
 
       void writeLog({
         userId, requestId, model: 'gpt-4o-mini', reasonCode: 'CACHE_HIT',
@@ -287,7 +344,8 @@ export async function POST(req: NextRequest) {
         customerId, featureId, userTier,
         revenueMicro: cacheRevenueMicro,
         marginMicro: cacheMarginMicro,
-        marginStatus: cacheMarginMicro > 0 ? 'profit' : cacheMarginMicro < 0 ? 'loss' : 'break_even',
+        marginStatus: cacheMarginStatus,
+        apiKeyId,
       })
 
       return NextResponse.json({
@@ -308,8 +366,10 @@ export async function POST(req: NextRequest) {
   const inputText = messages.map((m: any) => m.content ?? '').join('\n')
   const inputTokens = estimateTokens(inputText)
   const classifierInput: ClassifierInput = { messages, totalInputTokens: inputTokens }
+  // Use effective budget limit for % calculation
+  const effectiveDailyLimitForPct = effectiveDailyLimitMicro
   const complexity = classify(classifierInput)
-  const budgetPct  = Math.round((redisSpent / budgetState.dailyLimitMicro) * 100)
+  const budgetPct  = Math.round((redisSpent / effectiveDailyLimitForPct) * 100)
 
   // ── Read feature flags + provider health in parallel (non-blocking) ──
   // All fail open — a Redis error here never stops a request.
@@ -487,8 +547,9 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(metaChunk))
 
         // Phase 5: Margin for streaming
-        const streamRevenueMicro = getMonthlyRevenueMicro(userPlan)
-        const streamMarginMicro = streamRevenueMicro - costResult.actualCostMicro
+        const streamRevenueMicro = revenueMicro
+        const streamMarginMicro = streamRevenueMicro !== null ? (streamRevenueMicro - costResult.actualCostMicro) : null
+        const streamMarginStatus = streamRevenueMicro !== null ? (streamMarginMicro! > 0 ? 'profit' : streamMarginMicro! < 0 ? 'loss' : 'break_even') : null
 
         void writeLog({
           userId, requestId, model: realModel, reasonCode: routing.reasonCode,
@@ -500,7 +561,8 @@ export async function POST(req: NextRequest) {
           customerId, featureId, userTier,
           revenueMicro: streamRevenueMicro,
           marginMicro: streamMarginMicro,
-          marginStatus: streamMarginMicro > 0 ? 'profit' : streamMarginMicro < 0 ? 'loss' : 'break_even',
+          marginStatus: streamMarginStatus,
+          apiKeyId,
         })
       },
     })
@@ -556,9 +618,9 @@ export async function POST(req: NextRequest) {
   void redis.setex(cacheKey, 3600, JSON.stringify(responseBody))
 
   // Phase 5: Margin calculation
-  const revenueMicro = getMonthlyRevenueMicro(userPlan)
-  const marginMicro = revenueMicro - costResult.actualCostMicro
-  const marginStatus = marginMicro > 0 ? 'profit' : marginMicro < 0 ? 'loss' : 'break_even'
+  const requestRevenueMicro = revenueMicro
+  const marginMicro = requestRevenueMicro !== null ? (requestRevenueMicro - costResult.actualCostMicro) : null
+  const marginStatus = requestRevenueMicro !== null ? (marginMicro! > 0 ? 'profit' : marginMicro! < 0 ? 'loss' : 'break_even') : null
 
   void writeLog({
     userId, requestId, model: realModel, reasonCode: routing.reasonCode,
@@ -568,9 +630,10 @@ export async function POST(req: NextRequest) {
     latencyMs,
     cacheKeyPrefix: promptHash.slice(0, 20),
     customerId, featureId, userTier,
-    revenueMicro,
+    revenueMicro: requestRevenueMicro,
     marginMicro,
     marginStatus,
+    apiKeyId,
   })
 
   return NextResponse.json(
@@ -589,7 +652,7 @@ export async function POST(req: NextRequest) {
         baselineCost:      costResult.baselineCostMicro / 1e6,
         savings:           costResult.savingsMicro / 1e6,
         // Phase 5/8: Margin fields
-        revenueMicro,
+        revenueMicro:      requestRevenueMicro,
         marginMicro,
         marginStatus,
         why,
@@ -635,6 +698,8 @@ interface WriteLogParams {
   revenueMicro?: number | null
   marginMicro?: number | null
   marginStatus?: string | null
+  // Phase 4: API key attribution
+  apiKeyId?: string | null
 }
 
 async function writeLog(params: WriteLogParams) {
@@ -643,16 +708,19 @@ async function writeLog(params: WriteLogParams) {
     costResult, isCacheHit, promptPreview,
     finishReason, latencyMs, cacheKeyPrefix,
     customerId, featureId, userTier, revenueMicro, marginMicro, marginStatus,
+    apiKeyId,
   } = params
 
   // ── Redis budget update (atomic pipeline) ──────────────────────────
   try {
+    const todayDateStr = new Date().toISOString().split('T')[0]
+    const budgetKey = `budget:${userId}:${todayDateStr}`
     const pipeline = redis.pipeline()
-    pipeline.hincrby(`budget:${userId}:today`, 'spentMicro',    costResult.actualCostMicro)
-    pipeline.hincrby(`budget:${userId}:today`, 'baselineMicro', costResult.baselineCostMicro)
-    pipeline.hincrby(`budget:${userId}:today`, 'requestCount',  1)
-    if (isCacheHit) pipeline.hincrby(`budget:${userId}:today`, 'cacheHits', 1)
-    pipeline.expire(`budget:${userId}:today`, 86400)
+    pipeline.hincrby(budgetKey, 'spentMicro',    costResult.actualCostMicro)
+    pipeline.hincrby(budgetKey, 'baselineMicro', costResult.baselineCostMicro)
+    pipeline.hincrby(budgetKey, 'requestCount',  1)
+    if (isCacheHit) pipeline.hincrby(budgetKey, 'cacheHits', 1)
+    pipeline.expire(budgetKey, 86400)
     await pipeline.exec()
   } catch (err) {
     console.error('[vela] Redis write failed:', err)
@@ -699,6 +767,8 @@ async function writeLog(params: WriteLogParams) {
           revenueMicro:  revenueMicro ?? null,
           marginMicro:   marginMicro  ?? null,
           marginStatus:  marginStatus ?? null,
+          // Phase 4: API key attribution
+          apiKeyId:      apiKeyId     ?? null,
         },
       }),
       prisma.budgetState.update({

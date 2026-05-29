@@ -50,11 +50,12 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+      const plan = (payload.notes?.plan as 'pro' | 'scale') ?? 'pro'
       await prisma.user.update({
         where: { email },
-        data: { plan: 'pro', trialEndsAt: null },
+        data: { plan, trialEndsAt: null },
       })
-      console.log(`[razorpay-webhook] Upgraded ${email} → pro`)
+      console.log(`[razorpay-webhook] Upgraded ${email} → ${plan}`)
     } catch (err) {
       console.error('[razorpay-webhook] DB update failed:', err)
       return NextResponse.json({ error: 'DB update failed' }, { status: 500 })

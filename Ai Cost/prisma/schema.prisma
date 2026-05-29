@@ -91,6 +91,9 @@ model DecisionLog {
   marginMicro       Int?              // revenueMicro - actualCostMicro (can be negative)
   marginStatus      String?           // "profit" | "loss" | "break_even"
 
+  // ── Phase 4 additions: API key attribution ──
+  apiKeyId          String?           // FK to ApiKey.id — which key was used
+
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt(sort: Desc)])
@@ -98,6 +101,7 @@ model DecisionLog {
   @@index([isRetry])
   @@index([customerId])
   @@index([featureId])
+  @@index([apiKeyId])
 }
 
 // ─────────────────────────────────────────────────────────────

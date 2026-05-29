@@ -1,75 +1,44 @@
-/**
- * GET /api/admin/users
- * Returns all users with aggregated spend + today's Redis request count.
- * OWNER ONLY — guarded by requireOwner().
- */
-
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
+import { resolveSessionUserId, isOwner } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { redis } from '@/lib/redis'
-import { requireOwner, resolveSessionUserId } from '@/lib/admin'
 
-export const dynamic = 'force-dynamic'
+export async function GET(req: NextRequest) {
+  const userId = await resolveSessionUserId(req)
+  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!(await isOwner(userId))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-export async function GET() {
-  // ── Auth guard ──────────────────────────────────────────────────
-  const userId = await resolveSessionUserId()
-  try {
-    await requireOwner(userId ?? '')
-  } catch {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-  }
-
-  // ── Efficient aggregate queries — NO N+1 ───────────────────────
-  const [users, budgetRows] = await Promise.all([
+  const [users, budgets] = await Promise.all([
     prisma.user.findMany({
-      select: {
-        id:        true,
-        email:     true,
-        plan:      true,
-        role:      true,
-        createdAt: true,
-      },
+      select: { id: true, email: true, plan: true, role: true, createdAt: true, encryptedApiKey: true },
       orderBy: { createdAt: 'desc' },
     }),
     prisma.budgetState.findMany({
-      select: {
-        userId:          true,
-        requestsToday:   true,
-        totalSpentMicro: true,
-      },
+      select: { userId: true, requestsToday: true, totalSpentMicro: true, totalBaselineMicro: true },
     }),
   ])
 
-  // Index budget rows by userId for O(1) lookup
-  const budgetMap = new Map(budgetRows.map(b => [b.userId, b]))
+  const budgetMap = new Map(budgets.map(b => [b.userId, b]))
 
-  // Batch-fetch requestsToday from Redis for all users
-  // Use pipelining-style parallel fetches — fail gracefully per key
-  const redisResults = await Promise.allSettled(
-    users.map(u => redis.get<number>(`budget:${u.id}`))
-  )
-
-  const result = users.map((u, idx) => {
-    const budget = budgetMap.get(u.id)
-
-    // Redis requestsToday (can override DB value if available)
-    let requestsToday = budget?.requestsToday ?? 0
-    const redisVal = redisResults[idx]
-    if (redisVal.status === 'fulfilled' && typeof redisVal.value === 'number') {
-      requestsToday = redisVal.value
-    }
-
+  const userRows = users.map(u => {
+    const b = budgetMap.get(u.id)
+    const totalSavedMicro = b ? Math.max(b.totalBaselineMicro - b.totalSpentMicro, 0) : 0
     return {
-      id:              u.id,
-      email:           u.email,
-      plan:            u.plan,
-      role:            u.role,
-      createdAt:       u.createdAt,
-      requestsToday,
-      totalSpendMicro: budget?.totalSpentMicro ?? 0,
+      id: u.id, email: u.email, plan: u.plan, role: u.role,
+      createdAt:       u.createdAt.toISOString(),
+      requestsToday:   b?.requestsToday   ?? 0,
+      totalSpentMicro: b?.totalSpentMicro ?? 0,
+      totalSavedMicro,
+      hasApiKey:       !!u.encryptedApiKey,
     }
   })
 
-  return NextResponse.json(result)
+  return NextResponse.json({
+    users: userRows,
+    stats: {
+      totalUsers:  users.length,
+      activeToday: budgets.filter(b => b.requestsToday > 0).length,
+      totalSpend:  budgets.reduce((a, b) => a + b.totalSpentMicro, 0),
+      totalSaved:  budgets.reduce((a, b) => a + Math.max(b.totalBaselineMicro - b.totalSpentMicro, 0), 0),
+    },
+  })
 }

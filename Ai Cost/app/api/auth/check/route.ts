@@ -1,12 +1,9 @@
-import { NextResponse } from 'next/server'
-import { createServerSupabase } from '@/lib/supabase-server'
+import { NextRequest, NextResponse } from 'next/server'
+import { resolveSessionUserId } from '@/lib/auth'
 
-export async function GET() {
-  const supabase = await createServerSupabase()
-  const { data: { user } } = await supabase.auth.getUser()
-  
-  if (user) {
-    return NextResponse.json({ loggedIn: true })
-  }
+// Unified auth check — reads vela_session cookie, not Supabase
+export async function GET(req: NextRequest) {
+  const userId = await resolveSessionUserId(req)
+  if (userId) return NextResponse.json({ loggedIn: true, userId })
   return NextResponse.json({ loggedIn: false })
 }

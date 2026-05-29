@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabase } from '@/lib/supabase-server'
+import { resolveSessionUserId } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 
 /**
@@ -12,9 +12,8 @@ import { prisma } from '@/lib/prisma'
  *   - upgrade_pro    → was a payment bypass. Plan upgrades ONLY via Razorpay webhook.
  */
 export async function POST(req: NextRequest) {
-  const supabase = await createServerSupabase()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = await resolveSessionUserId(req)
+  if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   let body: any
   try {
@@ -29,7 +28,7 @@ export async function POST(req: NextRequest) {
   if (action === 'start_trial') {
     // Prevent re-activating trial if user already used one
     const userRow = await prisma.user.findUnique({
-      where: { id: user.id },
+      where: { id: userId },
       select: { plan: true, trialEndsAt: true },
     })
 
@@ -45,7 +44,7 @@ export async function POST(req: NextRequest) {
     trialEndsAt.setDate(trialEndsAt.getDate() + 14) // 14 day trial
 
     await prisma.user.update({
-      where: { id: user.id },
+      where: { id: userId },
       data: { plan: 'pro_trial', trialEndsAt },
     })
 
