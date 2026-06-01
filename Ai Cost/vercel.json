@@ -2,7 +2,7 @@
   "crons": [
     { "path": "/api/cron/reset-budgets",    "schedule": "0 0 * * *"   },
     { "path": "/api/cron/learning",         "schedule": "0 3 * * *"   },
-    { "path": "/api/cron/health-check",     "schedule": "*/5 * * * *" },
-    { "path": "/api/cron/evaluate-alerts",  "schedule": "*/15 * * * *"}
+    { "path": "/api/cron/health-check",     "schedule": "0 1 * * *" },
+    { "path": "/api/cron/evaluate-alerts",  "schedule": "0 2 * * *"}
   ]
 }
